@@ -24,11 +24,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "10.15",
-      "signingIdentity": null,
-      "notarization": {
-        "teamId": "7WS855G6D3"
-      }
+      "minimumSystemVersion": "10.15"
     },
     "linux": {
       "appimage": {
