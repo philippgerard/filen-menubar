@@ -62,7 +62,6 @@ async fn handle_tray_action(
 
             // Show confirmation dialog
             let app_state = app_state.clone();
-            let cli_manager = cli_manager.clone();
             let tray = tray.clone();
 
             let confirmed = app_handle

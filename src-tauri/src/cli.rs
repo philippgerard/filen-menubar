@@ -185,10 +185,11 @@ impl CliManager {
                                     state.set_sync_state(SyncState::Synced).await;
                                     state.set_pending_count(0).await;
                                 }
-                            } else if line.starts_with("Syncing ") && !line.contains("{") {
-                                if state.get_sync_state().await != SyncState::Syncing {
-                                    state.set_sync_state(SyncState::Syncing).await;
-                                }
+                            } else if line.starts_with("Syncing ")
+                                && !line.contains("{")
+                                && state.get_sync_state().await != SyncState::Syncing
+                            {
+                                state.set_sync_state(SyncState::Syncing).await;
                             }
                         }
                         Ok(Ok(None)) => {

@@ -106,6 +106,7 @@ impl AppState {
         self.inner.write().await.storage_info = info;
     }
 
+    #[allow(dead_code)]
     pub async fn is_logged_in(&self) -> bool {
         self.inner.read().await.is_logged_in
     }
