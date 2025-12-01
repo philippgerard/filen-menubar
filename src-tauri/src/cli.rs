@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::state::{AppState, StorageInfo, SyncState};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use thiserror::Error;
@@ -7,6 +8,78 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
+
+/// Find the filen CLI binary by searching common installation paths.
+/// This is necessary because GUI apps launched from Finder don't inherit shell PATH.
+fn find_filen_cli() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+
+    // Common installation paths to search
+    let search_paths: Vec<PathBuf> = vec![
+        // Standard system paths
+        PathBuf::from("/usr/local/bin/filen"),
+        PathBuf::from("/opt/homebrew/bin/filen"),
+        // User local bin
+        home.join(".local/bin/filen"),
+        // npm global installs
+        home.join(".npm/bin/filen"),
+        home.join(".npm-global/bin/filen"),
+    ];
+
+    // Check standard paths first
+    for path in &search_paths {
+        if path.exists() {
+            log::info!("Found filen CLI at: {:?}", path);
+            return Some(path.clone());
+        }
+    }
+
+    // Search fnm (Fast Node Manager) installations
+    let fnm_base = home.join(".local/share/fnm/node-versions");
+    if fnm_base.exists() {
+        if let Ok(entries) = std::fs::read_dir(&fnm_base) {
+            for entry in entries.flatten() {
+                let filen_path = entry.path().join("installation/bin/filen");
+                if filen_path.exists() {
+                    log::info!("Found filen CLI in fnm at: {:?}", filen_path);
+                    return Some(filen_path);
+                }
+            }
+        }
+    }
+
+    // Search nvm (Node Version Manager) installations
+    let nvm_base = home.join(".nvm/versions/node");
+    if nvm_base.exists() {
+        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
+            for entry in entries.flatten() {
+                let filen_path = entry.path().join("bin/filen");
+                if filen_path.exists() {
+                    log::info!("Found filen CLI in nvm at: {:?}", filen_path);
+                    return Some(filen_path);
+                }
+            }
+        }
+    }
+
+    // Search volta installations
+    let volta_base = home.join(".volta/bin/filen");
+    if volta_base.exists() {
+        log::info!("Found filen CLI in volta at: {:?}", volta_base);
+        return Some(volta_base);
+    }
+
+    // Fallback to just "filen" (will use PATH if available)
+    log::warn!("filen CLI not found in common paths, falling back to PATH lookup");
+    None
+}
+
+/// Get the filen CLI command path
+fn get_filen_command() -> String {
+    find_filen_cli()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "filen".to_string())
+}
 
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -47,7 +120,9 @@ impl CliManager {
 
     /// Check if filen CLI is installed
     pub async fn is_cli_available() -> bool {
-        Command::new("filen")
+        let filen_cmd = get_filen_command();
+        log::debug!("Checking filen CLI availability at: {}", filen_cmd);
+        Command::new(&filen_cmd)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -74,7 +149,9 @@ impl CliManager {
 
         // Don't pass credentials - CLI will use its stored session
         // Use --verbose to get detailed file sync information
-        let mut cmd = Command::new("filen");
+        let filen_cmd = get_filen_command();
+        log::info!("Using filen CLI at: {}", filen_cmd);
+        let mut cmd = Command::new(&filen_cmd);
         cmd.arg("--verbose")
             .arg("sync")
             .arg(&sync_pair)
@@ -275,7 +352,8 @@ impl CliManager {
         log::info!("Running one-shot sync: {}", sync_pair);
         self.state.set_sync_state(SyncState::Syncing).await;
 
-        let output = Command::new("filen")
+        let filen_cmd = get_filen_command();
+        let output = Command::new(&filen_cmd)
             .arg("sync")
             .arg(&sync_pair)
             .output()
