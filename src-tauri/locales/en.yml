@@ -1,0 +1,36 @@
+_version: 1
+
+# Menu items
+menu:
+  status: "Status: %{status}"
+  up_to_date: "Up to date"
+  files_remaining: "%{count} files remaining..."
+  file_remaining: "1 file remaining..."
+  open_local_folder: "Open Local Folder"
+  open_web_ui: "Open Web UI"
+  login: "Login..."
+  logout: "Logout"
+  settings: "Settings..."
+  quit: "Quit"
+
+# Sync states
+status:
+  not_logged_in: "Not Logged In"
+  synced: "Synced"
+  syncing: "Syncing..."
+  paused: "Paused"
+  error: "Sync Error"
+
+# Tooltips
+tooltip:
+  app_name: "Filen Menubar"
+  syncing_files: "Filen - Syncing %{count} files"
+  syncing_file: "Filen - Syncing 1 file"
+  status: "Filen - %{status}"
+
+# Dialogs
+dialog:
+  logout_title: "Confirm Logout"
+  logout_message: "This will log you out of Filen and stop syncing. You'll need to run 'filen' in the terminal to log back in."
+  logout_confirm: "Logout"
+  logout_cancel: "Cancel"

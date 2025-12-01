@@ -75,7 +75,7 @@ impl Tray for FilenTray {
     }
 
     fn title(&self) -> String {
-        "Filen Menubar".to_string()
+        rust_i18n::t!("tooltip.app_name").to_string()
     }
 
     fn id(&self) -> String {
@@ -96,12 +96,12 @@ impl Tray for FilenTray {
         // Pending count text (matches macOS behavior)
         let pending_text = if pending_count > 0 {
             if pending_count == 1 {
-                "1 file remaining...".to_string()
+                rust_i18n::t!("menu.file_remaining").to_string()
             } else {
-                format!("{} files remaining...", pending_count)
+                rust_i18n::t!("menu.files_remaining", count = pending_count).to_string()
             }
         } else {
-            "Up to date".to_string()
+            rust_i18n::t!("menu.up_to_date").to_string()
         };
 
         let state_clone = self.state.clone();
@@ -114,7 +114,7 @@ impl Tray for FilenTray {
         vec![
             // Status (disabled, just for display)
             StandardItem {
-                label: format!("Status: {}", status_text),
+                label: rust_i18n::t!("menu.status", status = &status_text).to_string(),
                 enabled: false,
                 ..Default::default()
             }
@@ -129,7 +129,7 @@ impl Tray for FilenTray {
             MenuItem::Separator,
             // Open Local Folder
             StandardItem {
-                label: "Open Local Folder".to_string(),
+                label: rust_i18n::t!("menu.open_local_folder").to_string(),
                 enabled: logged_in,
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone.read() {
@@ -141,7 +141,7 @@ impl Tray for FilenTray {
             .into(),
             // Open Web UI
             StandardItem {
-                label: "Open Web UI".to_string(),
+                label: rust_i18n::t!("menu.open_web_ui").to_string(),
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone2.read() {
                         let _ = s.action_tx.send(TrayAction::OpenWebUI);
@@ -154,7 +154,7 @@ impl Tray for FilenTray {
             // Login/Logout
             if logged_in {
                 StandardItem {
-                    label: "Logout".to_string(),
+                    label: rust_i18n::t!("menu.logout").to_string(),
                     activate: Box::new(move |_| {
                         if let Ok(s) = state_clone3.read() {
                             let _ = s.action_tx.send(TrayAction::Logout);
@@ -165,7 +165,7 @@ impl Tray for FilenTray {
                 .into()
             } else {
                 StandardItem {
-                    label: "Login...".to_string(),
+                    label: rust_i18n::t!("menu.login").to_string(),
                     activate: Box::new(move |_| {
                         if let Ok(s) = state_clone4.read() {
                             let _ = s.action_tx.send(TrayAction::Login);
@@ -178,7 +178,7 @@ impl Tray for FilenTray {
             MenuItem::Separator,
             // Settings
             StandardItem {
-                label: "Settings...".to_string(),
+                label: rust_i18n::t!("menu.settings").to_string(),
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone5.read() {
                         let _ = s.action_tx.send(TrayAction::Settings);
@@ -189,7 +189,7 @@ impl Tray for FilenTray {
             .into(),
             // Quit
             StandardItem {
-                label: "Quit".to_string(),
+                label: rust_i18n::t!("menu.quit").to_string(),
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone6.read() {
                         let _ = s.action_tx.send(TrayAction::Quit);
@@ -209,7 +209,7 @@ pub async fn create_tray(
 ) -> Result<Arc<dyn TrayInterface>, Box<dyn std::error::Error>> {
     let state = Arc::new(RwLock::new(LinuxTrayState {
         sync_state: SyncState::NotLoggedIn,
-        status_text: "Not Logged In".to_string(),
+        status_text: rust_i18n::t!("status.not_logged_in").to_string(),
         pending_count: 0,
         logged_in: false,
         action_tx,

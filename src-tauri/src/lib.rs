@@ -13,6 +13,24 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::mpsc;
 use tray::{TrayAction, TrayInterface};
 
+// Initialize i18n with locale files
+rust_i18n::i18n!("locales", fallback = "en");
+
+/// Initialize the locale based on config or system settings
+fn init_locale(config: &Config) {
+    let locale = if let Some(ref locale) = config.locale {
+        locale.clone()
+    } else {
+        // Detect system locale, default to "en"
+        sys_locale::get_locale()
+            .map(|l| l.split('-').next().unwrap_or("en").to_string())
+            .unwrap_or_else(|| "en".to_string())
+    };
+
+    log::info!("Setting locale to: {}", locale);
+    rust_i18n::set_locale(&locale);
+}
+
 /// Handle tray menu actions
 async fn handle_tray_action(
     action: TrayAction,
@@ -43,7 +61,7 @@ async fn handle_tray_action(
                 log::info!("Found Filen CLI session, starting sync");
                 app_state.set_logged_in(true).await;
                 tray.set_logged_in(true);
-                tray.update_status(SyncState::Syncing.status_text());
+                tray.update_status(&SyncState::Syncing.status_text());
 
                 if let Err(e) = cli_manager.start_sync(config).await {
                     log::error!("Failed to start sync: {}", e);
@@ -62,10 +80,13 @@ async fn handle_tray_action(
 
             let confirmed = app_handle
                 .dialog()
-                .message("This will log you out of Filen and stop syncing. You'll need to run 'filen' in the terminal to log back in.")
-                .title("Confirm Logout")
+                .message(rust_i18n::t!("dialog.logout_message"))
+                .title(rust_i18n::t!("dialog.logout_title"))
                 .kind(MessageDialogKind::Warning)
-                .buttons(MessageDialogButtons::OkCancelCustom("Logout".to_string(), "Cancel".to_string()))
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    rust_i18n::t!("dialog.logout_confirm").to_string(),
+                    rust_i18n::t!("dialog.logout_cancel").to_string(),
+                ))
                 .blocking_show();
 
             if confirmed {
@@ -75,7 +96,7 @@ async fn handle_tray_action(
                 app_state.set_logged_in(false).await;
                 app_state.set_sync_state(SyncState::NotLoggedIn).await;
                 tray.set_logged_in(false);
-                tray.update_status(SyncState::NotLoggedIn.status_text());
+                tray.update_status(&SyncState::NotLoggedIn.status_text());
             } else {
                 log::info!("Logout cancelled");
             }
@@ -154,7 +175,7 @@ async fn status_update_loop(
         interval.tick().await;
 
         let sync_state = app_state.get_sync_state().await;
-        tray.update_status(sync_state.status_text());
+        tray.update_status(&sync_state.status_text());
         tray.update_icon(sync_state);
 
         // Update pending file count
@@ -181,6 +202,9 @@ pub fn run() {
             Config::default()
         }
     };
+
+    // Initialize locale
+    init_locale(&config);
 
     // Ensure sync folder exists
     if let Err(e) = config.ensure_sync_folder() {
@@ -272,7 +296,7 @@ pub fn run() {
                     log::info!("Found Filen CLI session, auto-starting sync");
                     app_state_for_autostart.set_logged_in(true).await;
                     tray_for_autostart.set_logged_in(true);
-                    tray_for_autostart.update_status(SyncState::Syncing.status_text());
+                    tray_for_autostart.update_status(&SyncState::Syncing.status_text());
 
                     if let Err(e) = cli_manager_for_autostart
                         .start_sync(&config_for_autostart)

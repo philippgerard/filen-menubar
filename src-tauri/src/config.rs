@@ -24,6 +24,9 @@ pub struct Config {
     pub sync_mode: String,
     /// Auto-start sync on launch
     pub auto_start: bool,
+    /// Locale override (e.g., "en", "de"). If None, uses system locale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
 }
 
 impl Default for Config {
@@ -37,6 +40,7 @@ impl Default for Config {
             remote_path: "/".to_string(),
             sync_mode: "twoWay".to_string(),
             auto_start: true,
+            locale: None,
         }
     }
 }

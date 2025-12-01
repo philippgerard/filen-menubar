@@ -20,13 +20,13 @@ pub enum SyncState {
 
 impl SyncState {
     /// Get the display text for the status menu item
-    pub fn status_text(&self) -> &'static str {
+    pub fn status_text(&self) -> String {
         match self {
-            SyncState::NotLoggedIn => "Not Logged In",
-            SyncState::Synced => "Synced",
-            SyncState::Syncing => "Syncing...",
-            SyncState::Paused => "Paused",
-            SyncState::Error => "Sync Error",
+            SyncState::NotLoggedIn => rust_i18n::t!("status.not_logged_in").to_string(),
+            SyncState::Synced => rust_i18n::t!("status.synced").to_string(),
+            SyncState::Syncing => rust_i18n::t!("status.syncing").to_string(),
+            SyncState::Paused => rust_i18n::t!("status.paused").to_string(),
+            SyncState::Error => rust_i18n::t!("status.error").to_string(),
         }
     }
 

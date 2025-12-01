@@ -67,15 +67,19 @@ impl TrayInterface for MacOsTray {
         // Update tooltip with current status
         let state = self.state.read().unwrap();
         let tooltip = if state.pending_count > 0 {
-            format!("Filen - Syncing {} file{}", state.pending_count, if state.pending_count == 1 { "" } else { "s" })
+            if state.pending_count == 1 {
+                rust_i18n::t!("tooltip.syncing_file").to_string()
+            } else {
+                rust_i18n::t!("tooltip.syncing_files", count = state.pending_count).to_string()
+            }
         } else {
-            format!("Filen - {}", text)
+            rust_i18n::t!("tooltip.status", status = text).to_string()
         };
         let _ = self.tray.set_tooltip(Some(&tooltip));
 
         // Update menu item text in-place (doesn't close menu)
         let items = self.menu_items.read().unwrap();
-        let _ = items.status_item.set_text(format!("Status: {}", text));
+        let _ = items.status_item.set_text(rust_i18n::t!("menu.status", status = text));
     }
 
     fn update_pending_count(&self, count: u32) {
@@ -91,9 +95,13 @@ impl TrayInterface for MacOsTray {
         // Update tooltip with current status (updates in real-time, even with menu open)
         let state = self.state.read().unwrap();
         let tooltip = if count > 0 {
-            format!("Filen - Syncing {} file{}", count, if count == 1 { "" } else { "s" })
+            if count == 1 {
+                rust_i18n::t!("tooltip.syncing_file").to_string()
+            } else {
+                rust_i18n::t!("tooltip.syncing_files", count = count).to_string()
+            }
         } else {
-            format!("Filen - {}", state.status_text)
+            rust_i18n::t!("tooltip.status", status = &state.status_text).to_string()
         };
         let _ = self.tray.set_tooltip(Some(&tooltip));
 
@@ -101,12 +109,12 @@ impl TrayInterface for MacOsTray {
         let items = self.menu_items.read().unwrap();
         let pending_text = if count > 0 {
             if count == 1 {
-                "1 file remaining...".to_string()
+                rust_i18n::t!("menu.file_remaining").to_string()
             } else {
-                format!("{} files remaining...", count)
+                rust_i18n::t!("menu.files_remaining", count = count).to_string()
             }
         } else {
-            "Up to date".to_string()
+            rust_i18n::t!("menu.up_to_date").to_string()
         };
         let _ = items.pending_item.set_text(&pending_text);
     }
@@ -139,7 +147,7 @@ fn build_menu(
     let mut builder = MenuBuilder::new(app);
 
     // Status (disabled, just for display)
-    let status_item = MenuItemBuilder::with_id("status", format!("Status: {}", status_text))
+    let status_item = MenuItemBuilder::with_id("status", rust_i18n::t!("menu.status", status = status_text))
         .enabled(false)
         .build(app)?;
     builder = builder.item(&status_item);
@@ -147,12 +155,12 @@ fn build_menu(
     // Pending file count (always present)
     let pending_text = if pending_count > 0 {
         if pending_count == 1 {
-            "1 file remaining...".to_string()
+            rust_i18n::t!("menu.file_remaining").to_string()
         } else {
-            format!("{} files remaining...", pending_count)
+            rust_i18n::t!("menu.files_remaining", count = pending_count).to_string()
         }
     } else {
-        "Up to date".to_string()
+        rust_i18n::t!("menu.up_to_date").to_string()
     };
     let pending_item = MenuItemBuilder::with_id("pending_count", &pending_text)
         .enabled(false)
@@ -162,13 +170,13 @@ fn build_menu(
     builder = builder.separator();
 
     // Open Local Folder
-    let open_folder = MenuItemBuilder::with_id("open_folder", "Open Local Folder")
+    let open_folder = MenuItemBuilder::with_id("open_folder", rust_i18n::t!("menu.open_local_folder"))
         .enabled(logged_in)
         .build(app)?;
     builder = builder.item(&open_folder);
 
     // Open Web UI
-    let open_web_ui = MenuItemBuilder::with_id("open_web_ui", "Open Web UI")
+    let open_web_ui = MenuItemBuilder::with_id("open_web_ui", rust_i18n::t!("menu.open_web_ui"))
         .build(app)?;
     builder = builder.item(&open_web_ui);
 
@@ -176,21 +184,21 @@ fn build_menu(
 
     // Login or Logout based on state
     if logged_in {
-        let logout_item = MenuItemBuilder::with_id("logout", "Logout").build(app)?;
+        let logout_item = MenuItemBuilder::with_id("logout", rust_i18n::t!("menu.logout")).build(app)?;
         builder = builder.item(&logout_item);
     } else {
-        let login_item = MenuItemBuilder::with_id("login", "Login...").build(app)?;
+        let login_item = MenuItemBuilder::with_id("login", rust_i18n::t!("menu.login")).build(app)?;
         builder = builder.item(&login_item);
     }
 
     builder = builder.separator();
 
     // Settings
-    let settings_item = MenuItemBuilder::with_id("settings", "Settings...").build(app)?;
+    let settings_item = MenuItemBuilder::with_id("settings", rust_i18n::t!("menu.settings")).build(app)?;
     builder = builder.item(&settings_item);
 
     // Quit
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", rust_i18n::t!("menu.quit")).build(app)?;
     builder = builder.item(&quit_item);
 
     let items = MenuItems {
@@ -206,9 +214,10 @@ pub fn create_tray(
     app: &AppHandle,
     action_tx: mpsc::UnboundedSender<TrayAction>,
 ) -> Result<Arc<dyn TrayInterface>, Box<dyn std::error::Error>> {
+    let initial_status = rust_i18n::t!("status.not_logged_in").to_string();
     let initial_state = MenuState {
         logged_in: false,
-        status_text: "Not Logged In".to_string(),
+        status_text: initial_status.clone(),
         pending_count: 0,
     };
 
@@ -224,7 +233,7 @@ pub fn create_tray(
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .tooltip("Filen Menubar");
+        .tooltip(&rust_i18n::t!("tooltip.app_name").to_string());
 
     // Try to use the default window icon if available
     if let Some(icon) = app.default_window_icon() {

@@ -178,19 +178,21 @@ Configuration is stored in a JSON file:
 
 ```json
 {
-  "local_path": "~/Filen",
-  "remote_path": "/",
-  "sync_mode": "twoWay",
-  "auto_start": true
+  "localPath": "~/Filen",
+  "remotePath": "/",
+  "syncMode": "twoWay",
+  "autoStart": true,
+  "locale": "de"
 }
 ```
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `local_path` | Local folder to sync | `~/Filen` |
-| `remote_path` | Remote Filen path | `/` |
-| `sync_mode` | Sync direction: `twoWay`, `localToCloud`, `cloudToLocal` | `twoWay` |
-| `auto_start` | Start syncing on app launch | `true` |
+| `localPath` | Local folder to sync | `~/Filen` |
+| `remotePath` | Remote Filen path | `/` |
+| `syncMode` | Sync direction: `twoWay`, `localToCloud`, `cloudToLocal` | `twoWay` |
+| `autoStart` | Start syncing on app launch | `true` |
+| `locale` | UI language (`en`, `de`). If omitted, uses system locale | System locale |
 
 ## Usage
 

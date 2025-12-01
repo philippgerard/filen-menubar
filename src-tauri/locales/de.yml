@@ -1,0 +1,36 @@
+_version: 1
+
+# Menu items
+menu:
+  status: "Status: %{status}"
+  up_to_date: "Aktuell"
+  files_remaining: "%{count} Dateien ausstehend..."
+  file_remaining: "1 Datei ausstehend..."
+  open_local_folder: "Lokalen Ordner öffnen"
+  open_web_ui: "Web-Oberfläche öffnen"
+  login: "Anmelden..."
+  logout: "Abmelden"
+  settings: "Einstellungen..."
+  quit: "Beenden"
+
+# Sync states
+status:
+  not_logged_in: "Nicht angemeldet"
+  synced: "Synchronisiert"
+  syncing: "Synchronisiere..."
+  paused: "Pausiert"
+  error: "Synchronisierungsfehler"
+
+# Tooltips
+tooltip:
+  app_name: "Filen Menubar"
+  syncing_files: "Filen - Synchronisiere %{count} Dateien"
+  syncing_file: "Filen - Synchronisiere 1 Datei"
+  status: "Filen - %{status}"
+
+# Dialogs
+dialog:
+  logout_title: "Abmeldung bestätigen"
+  logout_message: "Dadurch werden Sie von Filen abgemeldet und die Synchronisierung wird gestoppt. Sie müssen 'filen' im Terminal ausführen, um sich erneut anzumelden."
+  logout_confirm: "Abmelden"
+  logout_cancel: "Abbrechen"
