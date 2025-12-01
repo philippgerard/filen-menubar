@@ -128,13 +128,12 @@ impl Tray for FilenTray {
                 ..Default::default()
             }
             .into(),
-            // Sync Now
+            // Open Web UI
             StandardItem {
-                label: "Sync Now".to_string(),
-                enabled: logged_in,
+                label: "Open Web UI".to_string(),
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone2.read() {
-                        let _ = s.action_tx.send(TrayAction::SyncNow);
+                        let _ = s.action_tx.send(TrayAction::OpenWebUI);
                     }
                 }),
                 ..Default::default()

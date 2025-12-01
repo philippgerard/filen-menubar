@@ -15,7 +15,7 @@ use crate::state::SyncState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     OpenFolder,
-    SyncNow,
+    OpenWebUI,
     Login,
     Logout,
     Settings,

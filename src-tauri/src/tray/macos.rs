@@ -167,11 +167,10 @@ fn build_menu(
         .build(app)?;
     builder = builder.item(&open_folder);
 
-    // Sync Now
-    let sync_now = MenuItemBuilder::with_id("sync_now", "Sync Now")
-        .enabled(logged_in)
+    // Open Web UI
+    let open_web_ui = MenuItemBuilder::with_id("open_web_ui", "Open Web UI")
         .build(app)?;
-    builder = builder.item(&sync_now);
+    builder = builder.item(&open_web_ui);
 
     builder = builder.separator();
 
@@ -242,7 +241,7 @@ pub fn create_tray(
     app.on_menu_event(move |_app, event| {
         let action = match event.id().as_ref() {
             "open_folder" => Some(TrayAction::OpenFolder),
-            "sync_now" => Some(TrayAction::SyncNow),
+            "open_web_ui" => Some(TrayAction::OpenWebUI),
             "login" => Some(TrayAction::Login),
             "logout" => Some(TrayAction::Logout),
             "settings" => Some(TrayAction::Settings),

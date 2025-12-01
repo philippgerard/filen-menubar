@@ -29,14 +29,10 @@ async fn handle_tray_action(
                 log::error!("Failed to open folder: {}", e);
             }
         }
-        TrayAction::SyncNow => {
-            log::info!("Manual sync triggered");
-            if CredentialManager::exists() {
-                if let Err(e) = cli_manager.sync_once(config).await {
-                    log::error!("Sync failed: {}", e);
-                }
-            } else {
-                log::warn!("No credentials found for sync");
+        TrayAction::OpenWebUI => {
+            log::info!("Opening Filen web UI");
+            if let Err(e) = open::that("https://app.filen.io") {
+                log::error!("Failed to open web UI: {}", e);
             }
         }
         TrayAction::Login => {

@@ -395,6 +395,7 @@ impl CliManager {
     }
 
     /// Trigger a manual sync (one-shot, uses CLI's stored session)
+    #[allow(dead_code)]
     pub async fn sync_once(&self, config: &Config) -> Result<(), CliError> {
         let sync_pair = format!(
             "{}:{}:{}",
