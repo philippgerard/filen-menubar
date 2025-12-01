@@ -60,7 +60,7 @@ async fn handle_tray_action(
             if CredentialManager::exists() {
                 log::info!("Found Filen CLI session, starting sync");
                 app_state.set_logged_in(true).await;
-                tray.set_logged_in(true);
+                tray.set_login_state(Some(true));
                 tray.update_status(&SyncState::Syncing.status_text());
 
                 if let Err(e) = cli_manager.start_sync(config).await {
@@ -95,7 +95,7 @@ async fn handle_tray_action(
                 let _ = CredentialManager::delete();
                 app_state.set_logged_in(false).await;
                 app_state.set_sync_state(SyncState::NotLoggedIn).await;
-                tray.set_logged_in(false);
+                tray.set_login_state(Some(false));
                 tray.update_status(&SyncState::NotLoggedIn.status_text());
             } else {
                 log::info!("Logout cancelled");
@@ -288,25 +288,49 @@ pub fn run() {
                     log::error!(
                         "Filen CLI not found. Please install it with: npm install -g @filen/cli"
                     );
+                    app_state_for_autostart
+                        .set_sync_state(SyncState::CliNotFound)
+                        .await;
+                    tray_for_autostart.update_status(&SyncState::CliNotFound.status_text());
+                    // Keep login_state as None (hidden) since we can't determine login status
                     return;
                 }
 
                 // Check for stored CLI session
-                if CredentialManager::exists() && config_for_autostart.auto_start {
-                    log::info!("Found Filen CLI session, auto-starting sync");
-                    app_state_for_autostart.set_logged_in(true).await;
-                    tray_for_autostart.set_logged_in(true);
-                    tray_for_autostart.update_status(&SyncState::Syncing.status_text());
+                if CredentialManager::exists() {
+                    if config_for_autostart.auto_start {
+                        log::info!("Found Filen CLI session, auto-starting sync");
+                        app_state_for_autostart.set_logged_in(true).await;
+                        tray_for_autostart.set_login_state(Some(true));
+                        tray_for_autostart.update_status(&SyncState::Syncing.status_text());
 
-                    if let Err(e) = cli_manager_for_autostart
-                        .start_sync(&config_for_autostart)
-                        .await
-                    {
-                        log::error!("Failed to auto-start sync: {}", e);
+                        if let Err(e) = cli_manager_for_autostart
+                            .start_sync(&config_for_autostart)
+                            .await
+                        {
+                            log::error!("Failed to auto-start sync: {}", e);
+                            app_state_for_autostart
+                                .set_sync_state(SyncState::Error)
+                                .await;
+                        }
+                    } else {
+                        // Logged in but auto_start disabled - show as idle/synced
+                        log::info!("Found Filen CLI session, but auto_start is disabled");
+                        app_state_for_autostart.set_logged_in(true).await;
                         app_state_for_autostart
-                            .set_sync_state(SyncState::Error)
+                            .set_sync_state(SyncState::Synced)
                             .await;
+                        tray_for_autostart.set_login_state(Some(true));
+                        tray_for_autostart.update_status(&SyncState::Synced.status_text());
                     }
+                } else {
+                    // No credentials - transition to NotLoggedIn
+                    log::info!("No Filen CLI session found");
+                    app_state_for_autostart
+                        .set_sync_state(SyncState::NotLoggedIn)
+                        .await;
+                    tray_for_autostart.set_login_state(Some(false));
+                    tray_for_autostart.update_status(&SyncState::NotLoggedIn.status_text());
                 }
             });
 

@@ -15,11 +15,13 @@ menu:
 
 # Sync states
 status:
+  starting: "Wird gestartet..."
   not_logged_in: "Nicht angemeldet"
   synced: "Synchronisiert"
   syncing: "Synchronisiere..."
   paused: "Pausiert"
   error: "Synchronisierungsfehler"
+  cli_not_found: "CLI nicht gefunden"
 
 # Tooltips
 tooltip:

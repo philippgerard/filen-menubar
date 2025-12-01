@@ -12,7 +12,8 @@ use tokio::sync::mpsc;
 
 /// Shared state for menu updates
 struct MenuState {
-    logged_in: bool,
+    /// Login state: None = starting/unknown, Some(true) = logged in, Some(false) = not logged in
+    login_state: Option<bool>,
     status_text: String,
     pending_count: u32,
 }
@@ -41,7 +42,7 @@ impl MacOsTray {
             &self.app,
             &state.status_text,
             state.pending_count,
-            state.logged_in,
+            state.login_state,
         ) {
             let _ = self.tray.set_menu(Some(menu));
             *self.menu_items.write().unwrap() = items;
@@ -123,11 +124,11 @@ impl TrayInterface for MacOsTray {
         // Storage not supported by CLI, ignore
     }
 
-    fn set_logged_in(&self, logged_in: bool) {
+    fn set_login_state(&self, login_state: Option<bool>) {
         {
             let mut state = self.state.write().unwrap();
-            if state.logged_in != logged_in {
-                state.logged_in = logged_in;
+            if state.login_state != login_state {
+                state.login_state = login_state;
             } else {
                 return; // No change, don't rebuild
             }
@@ -142,7 +143,7 @@ fn build_menu(
     app: &AppHandle,
     status_text: &str,
     pending_count: u32,
-    logged_in: bool,
+    login_state: Option<bool>,
 ) -> Result<(Menu<tauri::Wry>, MenuItems), Box<dyn std::error::Error>> {
     let mut builder = MenuBuilder::new(app);
 
@@ -169,9 +170,9 @@ fn build_menu(
 
     builder = builder.separator();
 
-    // Open Local Folder
+    // Open Local Folder (enabled only when logged in)
     let open_folder = MenuItemBuilder::with_id("open_folder", rust_i18n::t!("menu.open_local_folder"))
-        .enabled(logged_in)
+        .enabled(login_state == Some(true))
         .build(app)?;
     builder = builder.item(&open_folder);
 
@@ -182,13 +183,19 @@ fn build_menu(
 
     builder = builder.separator();
 
-    // Login or Logout based on state
-    if logged_in {
-        let logout_item = MenuItemBuilder::with_id("logout", rust_i18n::t!("menu.logout")).build(app)?;
-        builder = builder.item(&logout_item);
-    } else {
-        let login_item = MenuItemBuilder::with_id("login", rust_i18n::t!("menu.login")).build(app)?;
-        builder = builder.item(&login_item);
+    // Login or Logout based on state (hidden when None/starting)
+    match login_state {
+        Some(true) => {
+            let logout_item = MenuItemBuilder::with_id("logout", rust_i18n::t!("menu.logout")).build(app)?;
+            builder = builder.item(&logout_item);
+        }
+        Some(false) => {
+            let login_item = MenuItemBuilder::with_id("login", rust_i18n::t!("menu.login")).build(app)?;
+            builder = builder.item(&login_item);
+        }
+        None => {
+            // Starting state - hide both Login and Logout buttons
+        }
     }
 
     builder = builder.separator();
@@ -214,9 +221,9 @@ pub fn create_tray(
     app: &AppHandle,
     action_tx: mpsc::UnboundedSender<TrayAction>,
 ) -> Result<Arc<dyn TrayInterface>, Box<dyn std::error::Error>> {
-    let initial_status = rust_i18n::t!("status.not_logged_in").to_string();
+    let initial_status = rust_i18n::t!("status.starting").to_string();
     let initial_state = MenuState {
-        logged_in: false,
+        login_state: None, // Starting state - unknown login status
         status_text: initial_status.clone(),
         pending_count: 0,
     };
@@ -226,7 +233,7 @@ pub fn create_tray(
         app,
         &initial_state.status_text,
         initial_state.pending_count,
-        initial_state.logged_in,
+        initial_state.login_state,
     )?;
 
     // Create tray icon

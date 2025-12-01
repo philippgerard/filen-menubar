@@ -11,7 +11,8 @@ struct LinuxTrayState {
     sync_state: SyncState,
     status_text: String,
     pending_count: u32,
-    logged_in: bool,
+    /// Login state: None = starting/unknown, Some(true) = logged in, Some(false) = not logged in
+    login_state: Option<bool>,
     action_tx: mpsc::UnboundedSender<TrayAction>,
 }
 
@@ -40,9 +41,9 @@ impl TrayInterface for LinuxTray {
         // Storage not supported by CLI, ignore (matches macOS behavior)
     }
 
-    fn set_logged_in(&self, logged_in: bool) {
+    fn set_login_state(&self, login_state: Option<bool>) {
         if let Ok(mut s) = self.state.write() {
-            s.logged_in = logged_in;
+            s.login_state = login_state;
         }
         self.handle.update(|_| {});
     }
@@ -66,11 +67,12 @@ impl Tray for FilenTray {
         // You can also use icon_pixmap() for embedded icons
         let state = self.state.read().map(|s| s.sync_state).unwrap_or_default();
         match state {
-            SyncState::Synced | SyncState::NotLoggedIn | SyncState::Paused => {
-                "folder-sync".to_string()
-            }
+            SyncState::Starting
+            | SyncState::Synced
+            | SyncState::NotLoggedIn
+            | SyncState::Paused => "folder-sync".to_string(),
             SyncState::Syncing => "folder-sync".to_string(),
-            SyncState::Error => "dialog-error".to_string(),
+            SyncState::Error | SyncState::CliNotFound => "dialog-error".to_string(),
         }
     }
 
@@ -91,7 +93,7 @@ impl Tray for FilenTray {
             .map(|s| s.status_text.clone())
             .unwrap_or_else(|| "Unknown".to_string());
         let pending_count = state.as_ref().map(|s| s.pending_count).unwrap_or(0);
-        let logged_in = state.as_ref().map(|s| s.logged_in).unwrap_or(false);
+        let login_state = state.as_ref().and_then(|s| s.login_state);
 
         // Pending count text (matches macOS behavior)
         let pending_text = if pending_count > 0 {
@@ -111,7 +113,7 @@ impl Tray for FilenTray {
         let state_clone5 = self.state.clone();
         let state_clone6 = self.state.clone();
 
-        vec![
+        let mut items = vec![
             // Status (disabled, just for display)
             StandardItem {
                 label: rust_i18n::t!("menu.status", status = &status_text).to_string(),
@@ -127,10 +129,10 @@ impl Tray for FilenTray {
             }
             .into(),
             MenuItem::Separator,
-            // Open Local Folder
+            // Open Local Folder (enabled only when logged in)
             StandardItem {
                 label: rust_i18n::t!("menu.open_local_folder").to_string(),
-                enabled: logged_in,
+                enabled: login_state == Some(true),
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone.read() {
                         let _ = s.action_tx.send(TrayAction::OpenFolder);
@@ -151,32 +153,50 @@ impl Tray for FilenTray {
             }
             .into(),
             MenuItem::Separator,
-            // Login/Logout
-            if logged_in {
-                StandardItem {
-                    label: rust_i18n::t!("menu.logout").to_string(),
-                    activate: Box::new(move |_| {
-                        if let Ok(s) = state_clone3.read() {
-                            let _ = s.action_tx.send(TrayAction::Logout);
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into()
-            } else {
-                StandardItem {
-                    label: rust_i18n::t!("menu.login").to_string(),
-                    activate: Box::new(move |_| {
-                        if let Ok(s) = state_clone4.read() {
-                            let _ = s.action_tx.send(TrayAction::Login);
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into()
-            },
-            MenuItem::Separator,
-            // Settings
+        ];
+
+        // Login/Logout based on state (hidden when None/starting)
+        match login_state {
+            Some(true) => {
+                items.push(
+                    StandardItem {
+                        label: rust_i18n::t!("menu.logout").to_string(),
+                        activate: Box::new(move |_| {
+                            if let Ok(s) = state_clone3.read() {
+                                let _ = s.action_tx.send(TrayAction::Logout);
+                            }
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                );
+            }
+            Some(false) => {
+                items.push(
+                    StandardItem {
+                        label: rust_i18n::t!("menu.login").to_string(),
+                        activate: Box::new(move |_| {
+                            if let Ok(s) = state_clone4.read() {
+                                let _ = s.action_tx.send(TrayAction::Login);
+                            }
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                );
+            }
+            None => {
+                // Starting state - hide both Login and Logout buttons
+                // Suppress unused variable warnings
+                let _ = state_clone3;
+                let _ = state_clone4;
+            }
+        }
+
+        items.push(MenuItem::Separator);
+
+        // Settings
+        items.push(
             StandardItem {
                 label: rust_i18n::t!("menu.settings").to_string(),
                 activate: Box::new(move |_| {
@@ -187,7 +207,10 @@ impl Tray for FilenTray {
                 ..Default::default()
             }
             .into(),
-            // Quit
+        );
+
+        // Quit
+        items.push(
             StandardItem {
                 label: rust_i18n::t!("menu.quit").to_string(),
                 activate: Box::new(move |_| {
@@ -198,7 +221,9 @@ impl Tray for FilenTray {
                 ..Default::default()
             }
             .into(),
-        ]
+        );
+
+        items
     }
 }
 
@@ -208,10 +233,10 @@ pub async fn create_tray(
     action_tx: mpsc::UnboundedSender<TrayAction>,
 ) -> Result<Arc<dyn TrayInterface>, Box<dyn std::error::Error>> {
     let state = Arc::new(RwLock::new(LinuxTrayState {
-        sync_state: SyncState::NotLoggedIn,
-        status_text: rust_i18n::t!("status.not_logged_in").to_string(),
+        sync_state: SyncState::Starting,
+        status_text: rust_i18n::t!("status.starting").to_string(),
         pending_count: 0,
-        logged_in: false,
+        login_state: None, // Starting state - unknown login status
         action_tx,
     }));
 

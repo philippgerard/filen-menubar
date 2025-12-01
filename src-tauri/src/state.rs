@@ -5,8 +5,10 @@ use tokio::sync::RwLock;
 /// Represents the current sync state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SyncState {
-    /// Not logged in
+    /// Application is starting up
     #[default]
+    Starting,
+    /// Not logged in
     NotLoggedIn,
     /// Successfully synced, idle
     Synced,
@@ -16,17 +18,21 @@ pub enum SyncState {
     Paused,
     /// Error occurred during sync
     Error,
+    /// Filen CLI not found/not installed
+    CliNotFound,
 }
 
 impl SyncState {
     /// Get the display text for the status menu item
     pub fn status_text(&self) -> String {
         match self {
+            SyncState::Starting => rust_i18n::t!("status.starting").to_string(),
             SyncState::NotLoggedIn => rust_i18n::t!("status.not_logged_in").to_string(),
             SyncState::Synced => rust_i18n::t!("status.synced").to_string(),
             SyncState::Syncing => rust_i18n::t!("status.syncing").to_string(),
             SyncState::Paused => rust_i18n::t!("status.paused").to_string(),
             SyncState::Error => rust_i18n::t!("status.error").to_string(),
+            SyncState::CliNotFound => rust_i18n::t!("status.cli_not_found").to_string(),
         }
     }
 
@@ -34,11 +40,13 @@ impl SyncState {
     #[allow(dead_code)]
     pub fn icon_suffix(&self) -> &'static str {
         match self {
+            SyncState::Starting => "idle",
             SyncState::NotLoggedIn => "idle",
             SyncState::Synced => "idle",
             SyncState::Syncing => "syncing",
             SyncState::Paused => "idle",
             SyncState::Error => "error",
+            SyncState::CliNotFound => "error",
         }
     }
 }
@@ -80,7 +88,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(AppStateInner {
-                sync_state: SyncState::NotLoggedIn,
+                sync_state: SyncState::Starting,
                 storage_info: StorageInfo::default(),
                 is_logged_in: false,
                 pending_count: 0,

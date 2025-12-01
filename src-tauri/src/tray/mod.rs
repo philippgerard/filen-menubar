@@ -37,8 +37,17 @@ pub trait TrayInterface: Send + Sync {
     #[allow(dead_code)]
     fn update_storage(&self, text: &str);
 
+    /// Set the login state
+    /// - None: Starting/unknown (hide Login/Logout buttons)
+    /// - Some(true): Logged in (show Logout button)
+    /// - Some(false): Not logged in (show Login button)
+    fn set_login_state(&self, state: Option<bool>);
+
     /// Set whether the user is logged in (affects menu items)
-    fn set_logged_in(&self, logged_in: bool);
+    /// Convenience method that calls set_login_state(Some(logged_in))
+    fn set_logged_in(&self, logged_in: bool) {
+        self.set_login_state(Some(logged_in));
+    }
 }
 
 #[cfg(target_os = "macos")]
