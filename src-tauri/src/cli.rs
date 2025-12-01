@@ -171,10 +171,14 @@ impl CliManager {
             cmd.env("PATH", path_env);
         }
 
-        cmd.status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
+        // Use a timeout to avoid hanging if the CLI is stuck
+        match timeout(Duration::from_secs(10), cmd.status()).await {
+            Ok(result) => result.map(|s| s.success()).unwrap_or(false),
+            Err(_) => {
+                log::warn!("Timeout checking filen CLI availability");
+                false
+            }
+        }
     }
 
     /// Start the sync process (uses CLI's stored session)
