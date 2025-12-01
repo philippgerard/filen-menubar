@@ -82,7 +82,7 @@ async fn handle_tray_action(
         }
         TrayAction::Settings => {
             log::info!("Settings requested");
-            // Open config file in TextEdit on macOS, default editor elsewhere
+            // Open config file in default editor
             if let Ok(config_path) = Config::config_path() {
                 #[cfg(target_os = "macos")]
                 {
@@ -95,7 +95,38 @@ async fn handle_tray_action(
                         log::error!("Failed to open config in TextEdit: {}", e);
                     }
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "linux")]
+                {
+                    // On Linux, try xdg-open first, fall back to common editors
+                    let opened = std::process::Command::new("xdg-open")
+                        .arg(&config_path)
+                        .spawn()
+                        .is_ok()
+                        || std::process::Command::new("gedit")
+                            .arg(&config_path)
+                            .spawn()
+                            .is_ok()
+                        || std::process::Command::new("kate")
+                            .arg(&config_path)
+                            .spawn()
+                            .is_ok()
+                        || std::process::Command::new("xed")
+                            .arg(&config_path)
+                            .spawn()
+                            .is_ok()
+                        || std::process::Command::new("nano")
+                            .arg(&config_path)
+                            .spawn()
+                            .is_ok();
+
+                    if !opened {
+                        log::error!(
+                            "Failed to open config file. Please edit manually: {:?}",
+                            config_path
+                        );
+                    }
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 {
                     if let Err(e) = open::that(&config_path) {
                         log::error!("Failed to open config: {}", e);

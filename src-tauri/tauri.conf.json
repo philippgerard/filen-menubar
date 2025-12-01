@@ -15,7 +15,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "deb", "rpm"],
+    "publisher": "Philipp Gerard",
+    "copyright": "Copyright (c) 2025 Philipp Gerard",
+    "licenseFile": "../LICENSE",
+    "shortDescription": "A lightweight menubar app for Filen cloud sync",
+    "longDescription": "Filen Menubar is a lightweight system tray application that wraps the Filen CLI to provide sync status monitoring. It runs in your system tray and shows the current sync state.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -27,8 +32,10 @@
       "minimumSystemVersion": "10.15"
     },
     "linux": {
-      "appimage": {
-        "bundleMediaFramework": false
+      "deb": {
+        "section": "utils",
+        "priority": "optional",
+        "depends": ["nodejs"]
       }
     }
   }

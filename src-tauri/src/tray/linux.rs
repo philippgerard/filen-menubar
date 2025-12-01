@@ -10,7 +10,6 @@ use tokio::sync::mpsc;
 struct LinuxTrayState {
     sync_state: SyncState,
     status_text: String,
-    storage_text: String,
     pending_count: u32,
     logged_in: bool,
     action_tx: mpsc::UnboundedSender<TrayAction>,
@@ -37,11 +36,8 @@ impl TrayInterface for LinuxTray {
         self.handle.update(|_| {});
     }
 
-    fn update_storage(&self, text: &str) {
-        if let Ok(mut s) = self.state.write() {
-            s.storage_text = text.to_string();
-        }
-        self.handle.update(|_| {});
+    fn update_storage(&self, _text: &str) {
+        // Storage not supported by CLI, ignore (matches macOS behavior)
     }
 
     fn set_logged_in(&self, logged_in: bool) {
@@ -94,11 +90,19 @@ impl Tray for FilenTray {
             .as_ref()
             .map(|s| s.status_text.clone())
             .unwrap_or_else(|| "Unknown".to_string());
-        let storage_text = state
-            .as_ref()
-            .map(|s| s.storage_text.clone())
-            .unwrap_or_else(|| "Storage: --".to_string());
+        let pending_count = state.as_ref().map(|s| s.pending_count).unwrap_or(0);
         let logged_in = state.as_ref().map(|s| s.logged_in).unwrap_or(false);
+
+        // Pending count text (matches macOS behavior)
+        let pending_text = if pending_count > 0 {
+            if pending_count == 1 {
+                "1 file remaining...".to_string()
+            } else {
+                format!("{} files remaining...", pending_count)
+            }
+        } else {
+            "Up to date".to_string()
+        };
 
         let state_clone = self.state.clone();
         let state_clone2 = self.state.clone();
@@ -111,6 +115,13 @@ impl Tray for FilenTray {
             // Status (disabled, just for display)
             StandardItem {
                 label: format!("Status: {}", status_text),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            // Pending count (disabled, just for display)
+            StandardItem {
+                label: pending_text,
                 enabled: false,
                 ..Default::default()
             }
@@ -136,14 +147,6 @@ impl Tray for FilenTray {
                         let _ = s.action_tx.send(TrayAction::OpenWebUI);
                     }
                 }),
-                ..Default::default()
-            }
-            .into(),
-            MenuItem::Separator,
-            // Storage info
-            StandardItem {
-                label: storage_text,
-                enabled: false,
                 ..Default::default()
             }
             .into(),
@@ -207,7 +210,6 @@ pub async fn create_tray(
     let state = Arc::new(RwLock::new(LinuxTrayState {
         sync_state: SyncState::NotLoggedIn,
         status_text: "Not Logged In".to_string(),
-        storage_text: "Storage: --".to_string(),
         pending_count: 0,
         logged_in: false,
         action_tx,

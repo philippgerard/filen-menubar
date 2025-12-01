@@ -66,9 +66,60 @@ sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
 
 ## Installation
 
+### Pre-built Binaries
+
+Download the latest release from the [Releases](https://github.com/philippgerard/filen-menubar/releases) page:
+
+- **macOS:** `.dmg` installer
+- **Linux (Debian/Ubuntu):** `.deb` package
+- **Linux (Fedora/RHEL):** `.rpm` package
+
+### Linux (Debian/Ubuntu)
+
+```bash
+# Install the deb package
+sudo dpkg -i filen-menubar_*.deb
+
+# Install any missing dependencies
+sudo apt-get install -f
+```
+
+### Linux (Fedora/RHEL/openSUSE)
+
+```bash
+# Install the rpm package
+sudo rpm -i filen-menubar-*.rpm
+
+# Or with dnf
+sudo dnf install filen-menubar-*.rpm
+```
+
+### Linux (Arch)
+
+Arch users should build from source (see below) or create an AUR package.
+
+```bash
+# Install build dependencies
+sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
+  libappindicator-gtk3 librsvg nodejs npm rust
+
+# Clone and build
+git clone https://github.com/philippgerard/filen-menubar.git
+cd filen-menubar
+npm install
+cargo install tauri-cli --version "^2" --locked
+npm run tauri build
+
+# Binary will be in src-tauri/target/release/filen-menubar
+```
+
+> **Note:** AppImage is not supported due to sandboxing issues with accessing the Filen CLI.
+
+### Building from Source
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/filen-menubar.git
+git clone https://github.com/philippgerard/filen-menubar.git
 cd filen-menubar
 
 # Install dependencies
@@ -121,12 +172,12 @@ Configuration is stored in a JSON file:
 Status: Synced
 Up to date              ← Shows "X files remaining..." when syncing
 ─────────────
-Open Sync Folder        → Opens your local sync folder in Finder
-Sync Now                → Trigger a manual one-shot sync
+Open Sync Folder        → Opens your local sync folder in Finder/file manager
+Open Web UI             → Opens Filen web interface in browser
 ─────────────
 Logout                  → Stop sync and clear session (with confirmation)
 ─────────────
-Settings...             → Opens config file in TextEdit (macOS)
+Settings...             → Opens config file in editor
 Quit                    → Stop syncing and exit
 ```
 
