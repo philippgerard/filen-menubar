@@ -211,7 +211,15 @@ impl CliManager {
 
     /// Check if filen CLI is installed
     pub async fn is_cli_available() -> bool {
-        let cli_info = find_filen_cli();
+        // Run filesystem search in blocking context to avoid blocking async runtime
+        let cli_info = match tokio::task::spawn_blocking(find_filen_cli).await {
+            Ok(info) => info,
+            Err(e) => {
+                log::error!("Failed to search for filen CLI: {}", e);
+                return false;
+            }
+        };
+
         log::info!("Checking filen CLI availability at: {}", cli_info.command);
 
         let mut cmd = Command::new(&cli_info.command);

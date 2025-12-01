@@ -169,12 +169,21 @@ async fn status_update_loop(
     tray: Arc<dyn TrayInterface>,
     _cli_manager: Arc<CliManager>,
 ) {
+    log::info!("Status update loop started");
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+    let mut tick_count = 0u32;
 
     loop {
         interval.tick().await;
+        tick_count += 1;
 
         let sync_state = app_state.get_sync_state().await;
+
+        // Log first few ticks and whenever state changes
+        if tick_count <= 3 {
+            log::debug!("Status loop tick {}: state={:?}", tick_count, sync_state);
+        }
+
         tray.update_status(&sync_state.status_text());
         tray.update_icon(sync_state);
 
@@ -283,62 +292,84 @@ pub fn run() {
             let tray_for_autostart = tray.clone();
 
             tauri::async_runtime::spawn(async move {
+                use tokio::time::{timeout, Duration};
+
                 log::info!("Starting initialization check...");
 
-                // Check if CLI is available
-                let cli_available = CliManager::is_cli_available().await;
-                log::info!("CLI availability check complete: {}", cli_available);
+                // Wrap entire initialization in a timeout to prevent hanging forever
+                let init_result = timeout(Duration::from_secs(15), async {
+                    // Check if CLI is available
+                    log::info!("Checking CLI availability...");
+                    let cli_available = CliManager::is_cli_available().await;
+                    log::info!("CLI availability check complete: {}", cli_available);
 
-                if !cli_available {
-                    log::error!(
-                        "Filen CLI not found. Please install it with: npm install -g @filen/cli"
-                    );
-                    app_state_for_autostart
-                        .set_sync_state(SyncState::CliNotFound)
-                        .await;
-                    tray_for_autostart.update_status(&SyncState::CliNotFound.status_text());
-                    // Keep login_state as None (hidden) since we can't determine login status
-                    return;
-                }
+                    if !cli_available {
+                        log::error!(
+                            "Filen CLI not found. Please install it with: npm install -g @filen/cli"
+                        );
+                        return (SyncState::CliNotFound, None);
+                    }
 
-                // Check for stored CLI session
-                let credentials_exist = CredentialManager::exists();
-                log::info!("Credentials exist: {}", credentials_exist);
+                    // Check for stored CLI session (sync operation, run in blocking context)
+                    log::info!("Checking credentials...");
+                    let credentials_exist = CredentialManager::exists();
+                    log::info!("Credentials exist: {}", credentials_exist);
 
-                if credentials_exist {
-                    if config_for_autostart.auto_start {
-                        log::info!("Found Filen CLI session, auto-starting sync");
-                        app_state_for_autostart.set_logged_in(true).await;
-                        tray_for_autostart.set_login_state(Some(true));
-                        tray_for_autostart.update_status(&SyncState::Syncing.status_text());
-
-                        if let Err(e) = cli_manager_for_autostart
-                            .start_sync(&config_for_autostart)
-                            .await
-                        {
-                            log::error!("Failed to auto-start sync: {}", e);
-                            app_state_for_autostart
-                                .set_sync_state(SyncState::Error)
-                                .await;
+                    if credentials_exist {
+                        if config_for_autostart.auto_start {
+                            log::info!("Found Filen CLI session, will auto-start sync");
+                            (SyncState::Syncing, Some(true))
+                        } else {
+                            log::info!("Found Filen CLI session, but auto_start is disabled");
+                            (SyncState::Synced, Some(true))
                         }
                     } else {
-                        // Logged in but auto_start disabled - show as idle/synced
-                        log::info!("Found Filen CLI session, but auto_start is disabled");
-                        app_state_for_autostart.set_logged_in(true).await;
-                        app_state_for_autostart
-                            .set_sync_state(SyncState::Synced)
-                            .await;
-                        tray_for_autostart.set_login_state(Some(true));
-                        tray_for_autostart.update_status(&SyncState::Synced.status_text());
+                        log::info!("No Filen CLI session found");
+                        (SyncState::NotLoggedIn, Some(false))
                     }
-                } else {
-                    // No credentials - transition to NotLoggedIn
-                    log::info!("No Filen CLI session found");
-                    app_state_for_autostart
-                        .set_sync_state(SyncState::NotLoggedIn)
-                        .await;
-                    tray_for_autostart.set_login_state(Some(false));
-                    tray_for_autostart.update_status(&SyncState::NotLoggedIn.status_text());
+                })
+                .await;
+
+                // Apply the result (or fallback on timeout)
+                let (new_state, login_state) = match init_result {
+                    Ok(result) => result,
+                    Err(_) => {
+                        log::error!("Initialization timed out, defaulting to NotLoggedIn");
+                        (SyncState::NotLoggedIn, Some(false))
+                    }
+                };
+
+                log::info!("Setting state to: {:?}, login_state: {:?}", new_state, login_state);
+
+                // Update app state
+                app_state_for_autostart.set_sync_state(new_state).await;
+                if let Some(logged_in) = login_state {
+                    if logged_in {
+                        app_state_for_autostart.set_logged_in(true).await;
+                    }
+                }
+
+                // Update tray
+                if let Some(ls) = login_state {
+                    tray_for_autostart.set_login_state(Some(ls));
+                }
+                tray_for_autostart.update_status(&new_state.status_text());
+                tray_for_autostart.update_icon(new_state);
+
+                log::info!("Initialization complete, state: {:?}", new_state);
+
+                // Start sync if needed (after state is set)
+                if new_state == SyncState::Syncing {
+                    if let Err(e) = cli_manager_for_autostart
+                        .start_sync(&config_for_autostart)
+                        .await
+                    {
+                        log::error!("Failed to auto-start sync: {}", e);
+                        app_state_for_autostart
+                            .set_sync_state(SyncState::Error)
+                            .await;
+                        tray_for_autostart.update_status(&SyncState::Error.status_text());
+                    }
                 }
             });
 
