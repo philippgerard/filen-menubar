@@ -2,7 +2,7 @@
 
 use super::{TrayAction, TrayInterface};
 use crate::state::SyncState;
-use ksni::{menu::StandardItem, Icon, Tray, TrayService};
+use ksni::{Tray, TrayService};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -11,6 +11,7 @@ struct LinuxTrayState {
     sync_state: SyncState,
     status_text: String,
     storage_text: String,
+    pending_count: u32,
     logged_in: bool,
     action_tx: mpsc::UnboundedSender<TrayAction>,
 }
@@ -46,6 +47,13 @@ impl TrayInterface for LinuxTray {
     fn set_logged_in(&self, logged_in: bool) {
         if let Ok(mut s) = self.state.write() {
             s.logged_in = logged_in;
+        }
+        self.handle.update(|_| {});
+    }
+
+    fn update_pending_count(&self, count: u32) {
+        if let Ok(mut s) = self.state.write() {
+            s.pending_count = count;
         }
         self.handle.update(|_| {});
     }
@@ -201,6 +209,7 @@ pub fn create_tray(
         sync_state: SyncState::NotLoggedIn,
         status_text: "Not Logged In".to_string(),
         storage_text: "Storage: --".to_string(),
+        pending_count: 0,
         logged_in: false,
         action_tx,
     }));
