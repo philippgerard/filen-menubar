@@ -1,0 +1,134 @@
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Represents the current sync state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SyncState {
+    /// Not logged in
+    #[default]
+    NotLoggedIn,
+    /// Successfully synced, idle
+    Synced,
+    /// Currently syncing files
+    Syncing,
+    /// Sync paused
+    Paused,
+    /// Error occurred during sync
+    Error,
+}
+
+impl SyncState {
+    /// Get the display text for the status menu item
+    pub fn status_text(&self) -> &'static str {
+        match self {
+            SyncState::NotLoggedIn => "Not Logged In",
+            SyncState::Synced => "Synced",
+            SyncState::Syncing => "Syncing...",
+            SyncState::Paused => "Paused",
+            SyncState::Error => "Sync Error",
+        }
+    }
+
+    /// Get the icon name suffix for this state
+    #[allow(dead_code)]
+    pub fn icon_suffix(&self) -> &'static str {
+        match self {
+            SyncState::NotLoggedIn => "idle",
+            SyncState::Synced => "idle",
+            SyncState::Syncing => "syncing",
+            SyncState::Paused => "idle",
+            SyncState::Error => "error",
+        }
+    }
+}
+
+/// Storage information
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StorageInfo {
+    /// Used storage in bytes
+    pub used: u64,
+    /// Total storage in bytes
+    pub total: u64,
+}
+
+impl StorageInfo {
+    /// Format storage as human-readable string
+    #[allow(dead_code)]
+    pub fn format(&self) -> String {
+        let used_gb = self.used as f64 / 1_073_741_824.0;
+        let total_gb = self.total as f64 / 1_073_741_824.0;
+        format!("{:.1} / {:.1} GB", used_gb, total_gb)
+    }
+}
+
+/// Application state shared across the app
+#[derive(Debug, Clone)]
+pub struct AppState {
+    inner: Arc<RwLock<AppStateInner>>,
+}
+
+#[derive(Debug)]
+struct AppStateInner {
+    sync_state: SyncState,
+    storage_info: StorageInfo,
+    is_logged_in: bool,
+    pending_count: u32,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(AppStateInner {
+                sync_state: SyncState::NotLoggedIn,
+                storage_info: StorageInfo::default(),
+                is_logged_in: false,
+                pending_count: 0,
+            })),
+        }
+    }
+
+    pub async fn get_sync_state(&self) -> SyncState {
+        self.inner.read().await.sync_state
+    }
+
+    pub async fn set_sync_state(&self, state: SyncState) {
+        self.inner.write().await.sync_state = state;
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_storage_info(&self) -> StorageInfo {
+        self.inner.read().await.storage_info.clone()
+    }
+
+    #[allow(dead_code)]
+    pub async fn set_storage_info(&self, info: StorageInfo) {
+        self.inner.write().await.storage_info = info;
+    }
+
+    pub async fn is_logged_in(&self) -> bool {
+        self.inner.read().await.is_logged_in
+    }
+
+    pub async fn set_logged_in(&self, logged_in: bool) {
+        let mut inner = self.inner.write().await;
+        inner.is_logged_in = logged_in;
+        if !logged_in {
+            inner.sync_state = SyncState::NotLoggedIn;
+        }
+    }
+
+    pub async fn get_pending_count(&self) -> u32 {
+        self.inner.read().await.pending_count
+    }
+
+    pub async fn set_pending_count(&self, count: u32) {
+        self.inner.write().await.pending_count = count;
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
