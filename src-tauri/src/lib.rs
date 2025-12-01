@@ -177,6 +177,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             // Create the tray icon
+            // On Linux with ksni 0.3, the spawn is async, so we need block_on
+            #[cfg(target_os = "linux")]
+            let tray = tauri::async_runtime::block_on(tray::create_tray(app.handle(), action_tx.clone()))
+                .expect("Failed to create tray");
+            #[cfg(not(target_os = "linux"))]
             let tray =
                 tray::create_tray(app.handle(), action_tx.clone()).expect("Failed to create tray");
 

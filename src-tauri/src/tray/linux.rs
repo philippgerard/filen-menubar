@@ -2,7 +2,7 @@
 
 use super::{TrayAction, TrayInterface};
 use crate::state::SyncState;
-use ksni::{Tray, TrayService};
+use ksni::{Tray, TrayMethods};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -201,7 +201,7 @@ impl Tray for FilenTray {
 }
 
 /// Create the tray icon for Linux using ksni
-pub fn create_tray(
+pub async fn create_tray(
     _app: &tauri::AppHandle,
     action_tx: mpsc::UnboundedSender<TrayAction>,
 ) -> Result<Arc<dyn TrayInterface>, Box<dyn std::error::Error>> {
@@ -218,9 +218,8 @@ pub fn create_tray(
         state: state.clone(),
     };
 
-    let service = TrayService::new(tray);
-    let handle = service.handle();
-    service.spawn();
+    // ksni 0.3 API: spawn() is now a method on the Tray trait via TrayMethods
+    let handle = tray.spawn().await?;
 
     Ok(Arc::new(LinuxTray { state, handle }))
 }
