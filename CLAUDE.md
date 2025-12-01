@@ -54,6 +54,14 @@ This is a **Tauri v2 menubar-only application** that wraps the Filen CLI to prov
 - **Platform tray abstraction**: `TrayInterface` trait allows macOS (Tauri TrayIcon) and Linux (ksni) implementations
 - **Platform parity**: macOS and Linux must have identical menu labels, functionality, and behavior. When updating one platform's tray menu, always update the other to match.
 
+### Linux ksni Caveats
+
+The Linux tray uses the `ksni` crate for D-Bus StatusNotifierItem support. Important notes:
+
+- **ksni's `Handle::update()` is async**: You MUST await the update call for D-Bus signals to be emitted. The `TrayInterface` trait methods are sync, so updates are spawned on Tauri's async runtime via `trigger_update()`.
+- **State is stored externally**: The `FilenTray` struct holds an `Arc<RwLock<LinuxTrayState>>` that's shared with `LinuxTray`. The `Tray::menu()` method reads from this shared state to build the menu.
+- **Empty closure is intentional**: `handle.update(|_| {}).await` uses an empty closure because we update the shared state before calling update. The closure receives `&mut FilenTray`, but our state is in the external `Arc<RwLock>`.
+
 ## Configuration
 
 Config stored at:
