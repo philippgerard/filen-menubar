@@ -50,7 +50,7 @@ async fn handle_tray_action(
                     app_state.set_sync_state(SyncState::Error).await;
                 }
             } else {
-                log::info!("No Filen CLI session found. Please run 'filen login' first to authenticate.");
+                log::info!("No Filen CLI session found. Please run 'filen' first to authenticate.");
             }
         }
         TrayAction::Logout => {
@@ -62,7 +62,7 @@ async fn handle_tray_action(
 
             let confirmed = app_handle
                 .dialog()
-                .message("This will log you out of Filen and stop syncing. You'll need to run 'filen login' in the terminal to log back in.")
+                .message("This will log you out of Filen and stop syncing. You'll need to run 'filen' in the terminal to log back in.")
                 .title("Confirm Logout")
                 .kind(MessageDialogKind::Warning)
                 .buttons(MessageDialogButtons::OkCancelCustom("Logout".to_string(), "Cancel".to_string()))

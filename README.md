@@ -31,8 +31,10 @@ filen --version
 **Important:** You must login to the Filen CLI before using this app:
 
 ```bash
-filen login
+filen
 ```
+
+This opens an interactive session where you can login.
 
 ### Build Dependencies
 
@@ -58,11 +60,13 @@ sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file \
   libxdo-devel libappindicator-gtk3-devel librsvg2-devel
 ```
 
-**Linux (Arch):**
+**Linux (Arch/CachyOS/Manjaro):**
 ```bash
-sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
-  libappindicator-gtk3 librsvg
+sudo pacman -S webkit2gtk-4.1 libappindicator-gtk3 librsvg base-devel \
+  curl wget file openssl libxdo
 ```
+
+> **Note:** The `webkit2gtk-4.1` package is essential - it provides `javascriptcoregtk-4.1` required by Tauri.
 
 ## Installation
 
@@ -94,9 +98,24 @@ sudo rpm -i filen-menubar-*.rpm
 sudo dnf install filen-menubar-*.rpm
 ```
 
-### Linux (Arch)
+### Linux (Arch/CachyOS/Manjaro)
 
-Arch users should build from source (see below) or create an AUR package.
+Use the install script for a complete installation with autostart:
+
+```bash
+git clone https://github.com/philippgerard/filen-menubar.git
+cd filen-menubar
+./scripts/install-linux.sh install
+```
+
+This will:
+- Install all build dependencies
+- Build the application
+- Install binary to `/usr/local/bin`
+- Create desktop entry and icons
+- Configure autostart on login
+
+Or build manually:
 
 ```bash
 # Install build dependencies
@@ -114,6 +133,19 @@ npm run tauri build
 ```
 
 > **Note:** AppImage is not supported due to sandboxing issues with accessing the Filen CLI.
+
+#### Install Script Options
+
+The install script supports several commands:
+
+```bash
+./scripts/install-linux.sh install    # Full install (build + setup + autostart)
+./scripts/install-linux.sh build      # Build only
+./scripts/install-linux.sh setup      # Install pre-built binary + autostart
+./scripts/install-linux.sh autostart  # Setup autostart only
+./scripts/install-linux.sh uninstall  # Remove everything
+./scripts/install-linux.sh deps       # Install dependencies only
+```
 
 ### Building from Source
 
@@ -162,7 +194,7 @@ Configuration is stored in a JSON file:
 
 ## Usage
 
-1. **First:** Login to the Filen CLI: `filen login`
+1. **First:** Login to the Filen CLI by running `filen` and following the prompts
 2. **Launch:** Start the menubar app
 3. **Click "Login..."** in the tray menu to start syncing (uses CLI's stored session)
 
@@ -185,7 +217,7 @@ Quit                    → Stop syncing and exit
 
 | State | Description |
 |-------|-------------|
-| **Not Logged In** | No CLI session found. Run `filen login` first. |
+| **Not Logged In** | No CLI session found. Run `filen` to login first. |
 | **Synced** | All files are up to date |
 | **Syncing...** | Files are being transferred (shows count) |
 | **Paused** | Sync is paused |
@@ -275,7 +307,7 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 
 - **CLI Dependency:** The app requires the Filen CLI to be installed and logged in separately
 - **CLI Sunset:** Filen is rewriting their CLI in Rust (expected Q4 2025/Q1 2026). This app will need updates when released.
-- **Login UI:** Currently requires running `filen login` in terminal. A proper login dialog is planned.
+- **Login UI:** Currently requires running `filen` in terminal to login. A proper login dialog is planned.
 - **Storage Display:** Not available (CLI v0.0.39 doesn't expose storage quota)
 
 ## Development
