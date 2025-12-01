@@ -22,19 +22,31 @@ pub struct LinuxTray {
     handle: ksni::Handle<FilenTray>,
 }
 
+impl LinuxTray {
+    /// Trigger a tray update by spawning the async update call
+    fn trigger_update(&self) {
+        let handle = self.handle.clone();
+        // Spawn the async update call - ksni's update() is async and must be awaited
+        // for the D-Bus signals to be emitted
+        tauri::async_runtime::spawn(async move {
+            handle.update(|_| {}).await;
+        });
+    }
+}
+
 impl TrayInterface for LinuxTray {
     fn update_icon(&self, state: SyncState) {
         if let Ok(mut s) = self.state.write() {
             s.sync_state = state;
         }
-        self.handle.update(|_| {});
+        self.trigger_update();
     }
 
     fn update_status(&self, text: &str) {
         if let Ok(mut s) = self.state.write() {
             s.status_text = text.to_string();
         }
-        self.handle.update(|_| {});
+        self.trigger_update();
     }
 
     fn update_storage(&self, _text: &str) {
@@ -45,14 +57,14 @@ impl TrayInterface for LinuxTray {
         if let Ok(mut s) = self.state.write() {
             s.login_state = login_state;
         }
-        self.handle.update(|_| {});
+        self.trigger_update();
     }
 
     fn update_pending_count(&self, count: u32) {
         if let Ok(mut s) = self.state.write() {
             s.pending_count = count;
         }
-        self.handle.update(|_| {});
+        self.trigger_update();
     }
 }
 

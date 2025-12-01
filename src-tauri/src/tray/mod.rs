@@ -45,6 +45,7 @@ pub trait TrayInterface: Send + Sync {
 
     /// Set whether the user is logged in (affects menu items)
     /// Convenience method that calls set_login_state(Some(logged_in))
+    #[allow(dead_code)]
     fn set_logged_in(&self, logged_in: bool) {
         self.set_login_state(Some(logged_in));
     }
