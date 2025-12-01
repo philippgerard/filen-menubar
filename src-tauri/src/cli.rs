@@ -112,10 +112,63 @@ fn find_filen_cli() -> FilenCliInfo {
     }
 }
 
+/// Find node binary in common version manager locations
+fn find_node_bin_dir() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+
+    // Check fnm (Fast Node Manager)
+    let fnm_base = home.join(".local/share/fnm/node-versions");
+    if fnm_base.exists() {
+        if let Ok(entries) = std::fs::read_dir(&fnm_base) {
+            for entry in entries.flatten() {
+                let bin_dir = entry.path().join("installation/bin");
+                if bin_dir.join("node").exists() {
+                    log::debug!("Found node in fnm at: {:?}", bin_dir);
+                    return Some(bin_dir);
+                }
+            }
+        }
+    }
+
+    // Check nvm (Node Version Manager)
+    let nvm_base = home.join(".nvm/versions/node");
+    if nvm_base.exists() {
+        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
+            for entry in entries.flatten() {
+                let bin_dir = entry.path().join("bin");
+                if bin_dir.join("node").exists() {
+                    log::debug!("Found node in nvm at: {:?}", bin_dir);
+                    return Some(bin_dir);
+                }
+            }
+        }
+    }
+
+    // Check volta
+    let volta_bin = home.join(".volta/bin");
+    if volta_bin.join("node").exists() {
+        log::debug!("Found node in volta at: {:?}", volta_bin);
+        return Some(volta_bin);
+    }
+
+    None
+}
+
 /// Build a PATH environment variable that includes the given bin directory
-/// along with essential system paths
+/// along with essential system paths and node binary location
 fn build_path_env(bin_dir: &std::path::Path) -> String {
     let system_paths = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+    // Check if bin_dir already contains node
+    if bin_dir.join("node").exists() {
+        return format!("{}:{}", bin_dir.display(), system_paths);
+    }
+
+    // Try to find node in version managers
+    if let Some(node_bin_dir) = find_node_bin_dir() {
+        return format!("{}:{}:{}", bin_dir.display(), node_bin_dir.display(), system_paths);
+    }
+
     format!("{}:{}", bin_dir.display(), system_paths)
 }
 
