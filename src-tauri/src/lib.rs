@@ -283,8 +283,13 @@ pub fn run() {
             let tray_for_autostart = tray.clone();
 
             tauri::async_runtime::spawn(async move {
+                log::info!("Starting initialization check...");
+
                 // Check if CLI is available
-                if !CliManager::is_cli_available().await {
+                let cli_available = CliManager::is_cli_available().await;
+                log::info!("CLI availability check complete: {}", cli_available);
+
+                if !cli_available {
                     log::error!(
                         "Filen CLI not found. Please install it with: npm install -g @filen/cli"
                     );
@@ -297,7 +302,10 @@ pub fn run() {
                 }
 
                 // Check for stored CLI session
-                if CredentialManager::exists() {
+                let credentials_exist = CredentialManager::exists();
+                log::info!("Credentials exist: {}", credentials_exist);
+
+                if credentials_exist {
                     if config_for_autostart.auto_start {
                         log::info!("Found Filen CLI session, auto-starting sync");
                         app_state_for_autostart.set_logged_in(true).await;

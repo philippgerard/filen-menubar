@@ -212,21 +212,31 @@ impl CliManager {
     /// Check if filen CLI is installed
     pub async fn is_cli_available() -> bool {
         let cli_info = find_filen_cli();
-        log::debug!("Checking filen CLI availability at: {}", cli_info.command);
+        log::info!("Checking filen CLI availability at: {}", cli_info.command);
 
         let mut cmd = Command::new(&cli_info.command);
         cmd.arg("--version")
+            .stdin(Stdio::null())   // Prevent hanging on stdin when running from autostart
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
         // Set PATH if we found a specific installation (needed for node-based CLI)
         if let Some(ref path_env) = cli_info.path_env {
+            log::debug!("Using PATH: {}", path_env);
             cmd.env("PATH", path_env);
         }
 
         // Use a timeout to avoid hanging if the CLI is stuck
-        match timeout(Duration::from_secs(10), cmd.status()).await {
-            Ok(result) => result.map(|s| s.success()).unwrap_or(false),
+        match timeout(Duration::from_secs(5), cmd.status()).await {
+            Ok(Ok(status)) => {
+                let available = status.success();
+                log::info!("Filen CLI available: {}", available);
+                available
+            }
+            Ok(Err(e)) => {
+                log::warn!("Failed to run filen CLI: {}", e);
+                false
+            }
             Err(_) => {
                 log::warn!("Timeout checking filen CLI availability");
                 false
