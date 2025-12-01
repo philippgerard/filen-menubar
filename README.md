@@ -204,7 +204,7 @@ Configuration is stored in a JSON file:
 Status: Synced
 Up to date              ← Shows "X files remaining..." when syncing
 ─────────────
-Open Sync Folder        → Opens your local sync folder in Finder/file manager
+Open Local Folder       → Opens your local sync folder in Finder/file manager
 Open Web UI             → Opens Filen web interface in browser
 ─────────────
 Logout                  → Stop sync and clear session (with confirmation)

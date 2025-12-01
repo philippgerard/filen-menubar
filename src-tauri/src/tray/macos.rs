@@ -161,8 +161,8 @@ fn build_menu(
 
     builder = builder.separator();
 
-    // Open Sync Folder
-    let open_folder = MenuItemBuilder::with_id("open_folder", "Open Sync Folder")
+    // Open Local Folder
+    let open_folder = MenuItemBuilder::with_id("open_folder", "Open Local Folder")
         .enabled(logged_in)
         .build(app)?;
     builder = builder.item(&open_folder);

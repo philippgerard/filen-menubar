@@ -52,6 +52,7 @@ This is a **Tauri v2 menubar-only application** that wraps the Filen CLI to prov
 - **No windows**: Uses `set_activation_policy(Accessory)` on macOS to hide from dock
 - **CLI dependency**: Requires `@filen/cli` installed globally and authenticated via `filen` interactive session
 - **Platform tray abstraction**: `TrayInterface` trait allows macOS (Tauri TrayIcon) and Linux (ksni) implementations
+- **Platform parity**: macOS and Linux must have identical menu labels, functionality, and behavior. When updating one platform's tray menu, always update the other to match.
 
 ## Configuration
 

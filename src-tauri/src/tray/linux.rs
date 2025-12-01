@@ -127,9 +127,9 @@ impl Tray for FilenTray {
             }
             .into(),
             MenuItem::Separator,
-            // Open Sync Folder
+            // Open Local Folder
             StandardItem {
-                label: "Open Sync Folder".to_string(),
+                label: "Open Local Folder".to_string(),
                 enabled: logged_in,
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone.read() {
