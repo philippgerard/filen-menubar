@@ -9,28 +9,50 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
 
+/// Information about the filen CLI location
+struct FilenCliInfo {
+    /// Path to the filen binary
+    command: String,
+    /// PATH environment variable to use (includes node binary directory)
+    path_env: Option<String>,
+}
+
 /// Find the filen CLI binary by searching common installation paths.
 /// This is necessary because GUI apps launched from Finder don't inherit shell PATH.
-fn find_filen_cli() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+/// Returns both the filen path and the PATH env needed to run it (for node-based installs).
+fn find_filen_cli() -> FilenCliInfo {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            log::warn!("Could not determine home directory");
+            return FilenCliInfo {
+                command: "filen".to_string(),
+                path_env: None,
+            };
+        }
+    };
 
-    // Common installation paths to search
-    let search_paths: Vec<PathBuf> = vec![
-        // Standard system paths
-        PathBuf::from("/usr/local/bin/filen"),
-        PathBuf::from("/opt/homebrew/bin/filen"),
+    // Common installation paths to search (with their bin directories for PATH)
+    let search_paths: Vec<(PathBuf, Option<PathBuf>)> = vec![
+        // Standard system paths - node should be in system PATH
+        (PathBuf::from("/usr/local/bin/filen"), Some(PathBuf::from("/usr/local/bin"))),
+        (PathBuf::from("/opt/homebrew/bin/filen"), Some(PathBuf::from("/opt/homebrew/bin"))),
         // User local bin
-        home.join(".local/bin/filen"),
+        (home.join(".local/bin/filen"), Some(home.join(".local/bin"))),
         // npm global installs
-        home.join(".npm/bin/filen"),
-        home.join(".npm-global/bin/filen"),
+        (home.join(".npm/bin/filen"), Some(home.join(".npm/bin"))),
+        (home.join(".npm-global/bin/filen"), Some(home.join(".npm-global/bin"))),
     ];
 
     // Check standard paths first
-    for path in &search_paths {
-        if path.exists() {
-            log::info!("Found filen CLI at: {:?}", path);
-            return Some(path.clone());
+    for (filen_path, bin_dir) in &search_paths {
+        if filen_path.exists() {
+            log::info!("Found filen CLI at: {:?}", filen_path);
+            let path_env = bin_dir.as_ref().map(|d| build_path_env(d));
+            return FilenCliInfo {
+                command: filen_path.to_string_lossy().to_string(),
+                path_env,
+            };
         }
     }
 
@@ -39,10 +61,15 @@ fn find_filen_cli() -> Option<PathBuf> {
     if fnm_base.exists() {
         if let Ok(entries) = std::fs::read_dir(&fnm_base) {
             for entry in entries.flatten() {
-                let filen_path = entry.path().join("installation/bin/filen");
+                let bin_dir = entry.path().join("installation/bin");
+                let filen_path = bin_dir.join("filen");
                 if filen_path.exists() {
+                    let path_env = build_path_env(&bin_dir);
                     log::info!("Found filen CLI in fnm at: {:?}", filen_path);
-                    return Some(filen_path);
+                    return FilenCliInfo {
+                        command: filen_path.to_string_lossy().to_string(),
+                        path_env: Some(path_env),
+                    };
                 }
             }
         }
@@ -53,32 +80,43 @@ fn find_filen_cli() -> Option<PathBuf> {
     if nvm_base.exists() {
         if let Ok(entries) = std::fs::read_dir(&nvm_base) {
             for entry in entries.flatten() {
-                let filen_path = entry.path().join("bin/filen");
+                let bin_dir = entry.path().join("bin");
+                let filen_path = bin_dir.join("filen");
                 if filen_path.exists() {
                     log::info!("Found filen CLI in nvm at: {:?}", filen_path);
-                    return Some(filen_path);
+                    return FilenCliInfo {
+                        command: filen_path.to_string_lossy().to_string(),
+                        path_env: Some(build_path_env(&bin_dir)),
+                    };
                 }
             }
         }
     }
 
     // Search volta installations
-    let volta_base = home.join(".volta/bin/filen");
-    if volta_base.exists() {
-        log::info!("Found filen CLI in volta at: {:?}", volta_base);
-        return Some(volta_base);
+    let volta_bin = home.join(".volta/bin");
+    let volta_filen = volta_bin.join("filen");
+    if volta_filen.exists() {
+        log::info!("Found filen CLI in volta at: {:?}", volta_filen);
+        return FilenCliInfo {
+            command: volta_filen.to_string_lossy().to_string(),
+            path_env: Some(build_path_env(&volta_bin)),
+        };
     }
 
     // Fallback to just "filen" (will use PATH if available)
     log::warn!("filen CLI not found in common paths, falling back to PATH lookup");
-    None
+    FilenCliInfo {
+        command: "filen".to_string(),
+        path_env: None,
+    }
 }
 
-/// Get the filen CLI command path
-fn get_filen_command() -> String {
-    find_filen_cli()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "filen".to_string())
+/// Build a PATH environment variable that includes the given bin directory
+/// along with essential system paths
+fn build_path_env(bin_dir: &std::path::Path) -> String {
+    let system_paths = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    format!("{}:{}", bin_dir.display(), system_paths)
 }
 
 #[derive(Error, Debug)]
@@ -120,13 +158,20 @@ impl CliManager {
 
     /// Check if filen CLI is installed
     pub async fn is_cli_available() -> bool {
-        let filen_cmd = get_filen_command();
-        log::debug!("Checking filen CLI availability at: {}", filen_cmd);
-        Command::new(&filen_cmd)
-            .arg("--version")
+        let cli_info = find_filen_cli();
+        log::debug!("Checking filen CLI availability at: {}", cli_info.command);
+
+        let mut cmd = Command::new(&cli_info.command);
+        cmd.arg("--version")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .stderr(Stdio::null());
+
+        // Set PATH if we found a specific installation (needed for node-based CLI)
+        if let Some(ref path_env) = cli_info.path_env {
+            cmd.env("PATH", path_env);
+        }
+
+        cmd.status()
             .await
             .map(|s| s.success())
             .unwrap_or(false)
@@ -149,9 +194,13 @@ impl CliManager {
 
         // Don't pass credentials - CLI will use its stored session
         // Use --verbose to get detailed file sync information
-        let filen_cmd = get_filen_command();
-        log::info!("Using filen CLI at: {}", filen_cmd);
-        let mut cmd = Command::new(&filen_cmd);
+        let cli_info = find_filen_cli();
+        log::info!("Using filen CLI at: {}", cli_info.command);
+        if let Some(ref path_env) = cli_info.path_env {
+            log::info!("Setting PATH for CLI: {}", path_env);
+        }
+
+        let mut cmd = Command::new(&cli_info.command);
         cmd.arg("--verbose")
             .arg("sync")
             .arg(&sync_pair)
@@ -159,6 +208,11 @@ impl CliManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+
+        // Set PATH if we found a specific installation (needed for node-based CLI)
+        if let Some(ref path_env) = cli_info.path_env {
+            cmd.env("PATH", path_env);
+        }
 
         let mut child = cmd.spawn()?;
 
@@ -352,12 +406,16 @@ impl CliManager {
         log::info!("Running one-shot sync: {}", sync_pair);
         self.state.set_sync_state(SyncState::Syncing).await;
 
-        let filen_cmd = get_filen_command();
-        let output = Command::new(&filen_cmd)
-            .arg("sync")
-            .arg(&sync_pair)
-            .output()
-            .await?;
+        let cli_info = find_filen_cli();
+        let mut cmd = Command::new(&cli_info.command);
+        cmd.arg("sync").arg(&sync_pair);
+
+        // Set PATH if we found a specific installation (needed for node-based CLI)
+        if let Some(ref path_env) = cli_info.path_env {
+            cmd.env("PATH", path_env);
+        }
+
+        let output = cmd.output().await?;
 
         if output.status.success() {
             log::info!("One-shot sync completed successfully");
