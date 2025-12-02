@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod credentials;
+mod logging;
 mod state;
 mod tray;
 
@@ -155,6 +156,13 @@ async fn handle_tray_action(
                 }
             }
         }
+        TrayAction::ShowLogs => {
+            log::info!("Show logs requested");
+            let log_dir = logging::get_log_dir();
+            if let Err(e) = open::that(&log_dir) {
+                log::error!("Failed to open log directory: {}", e);
+            }
+        }
         TrayAction::Quit => {
             log::info!("Quit requested");
             cli_manager.stop_sync().await;
@@ -200,22 +208,28 @@ async fn status_update_loop(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    log::info!("Starting Filen Menubar");
-
-    // Load configuration
+    // Load configuration first (needed for log_level)
     let config = match Config::load() {
-        Ok(c) => {
-            log::info!("Loaded config: {:?}", c);
-            c
-        }
+        Ok(c) => c,
         Err(e) => {
-            log::error!("Failed to load config: {}", e);
+            eprintln!("Failed to load config: {}", e);
             Config::default()
         }
     };
+
+    // Initialize logging (file logging only if enabled in config)
+    match logging::init_logging(config.logging_enabled, config.log_level.as_deref()) {
+        Ok(log_path) => {
+            log::info!("Starting Filen Menubar");
+            if config.logging_enabled {
+                log::info!("Log file: {:?}", log_path);
+            }
+            log::info!("Loaded config: {:?}", config);
+        }
+        Err(e) => {
+            eprintln!("Failed to initialize logging: {}", e);
+        }
+    }
 
     // Initialize locale
     init_locale(&config);

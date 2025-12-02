@@ -182,7 +182,9 @@ Configuration is stored in a JSON file:
   "remotePath": "/",
   "syncMode": "twoWay",
   "autoStart": true,
-  "locale": "de"
+  "locale": "de",
+  "loggingEnabled": true,
+  "logLevel": "info"
 }
 ```
 
@@ -193,6 +195,23 @@ Configuration is stored in a JSON file:
 | `syncMode` | Sync direction: `twoWay`, `localToCloud`, `cloudToLocal` | `twoWay` |
 | `autoStart` | Start syncing on app launch | `true` |
 | `locale` | UI language (`en`, `de`). If omitted, uses system locale | System locale |
+| `loggingEnabled` | Enable file logging for debugging | `false` |
+| `logLevel` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` | `info` |
+
+### Logging
+
+File logging is disabled by default. When enabled, logs are written to a single file that is overwritten on each app launch:
+
+- **macOS:** `~/Library/Logs/io.filen.menubar/filen.log`
+- **Linux:** `~/.local/share/filen-menubar/logs/filen.log`
+
+To enable logging, add `"loggingEnabled": true` to your config file. You can also set the log level with `"logLevel": "debug"` for more verbose output.
+
+Access logs via the **"Show Logs..."** menu item, or use the helper script:
+
+```bash
+./scripts/logs.sh
+```
 
 ## Usage
 
@@ -212,6 +231,8 @@ Open Web UI             → Opens Filen web interface in browser
 Logout                  → Stop sync and clear session (with confirmation)
 ─────────────
 Settings...             → Opens config file in editor
+Show Logs...            → Opens log folder (for debugging)
+─────────────
 Quit                    → Stop syncing and exit
 ```
 
@@ -314,10 +335,34 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 
 ## Development
 
-```bash
-# Run with debug logging
-RUST_LOG=debug npm run tauri dev
+### Quick Start
 
+```bash
+# Start development (with debug logging)
+./scripts/dev.sh
+
+# Or manually
+RUST_LOG=debug npm run tauri dev
+```
+
+### Development Scripts
+
+The `scripts/` directory contains helper scripts for common tasks:
+
+| Script | Description |
+|--------|-------------|
+| `./scripts/dev.sh` | Start development server with debug logging |
+| `./scripts/clean.sh` | Clean build cache and kill running instances |
+| `./scripts/rebuild.sh` | Clean rebuild (use after locale/compile-time changes) |
+| `./scripts/test.sh` | Run all tests |
+| `./scripts/lint.sh` | Check formatting and run clippy |
+| `./scripts/lint.sh --fix` | Auto-fix formatting issues |
+| `./scripts/release.sh` | Build production release (runs tests first) |
+| `./scripts/logs.sh` | Open log folder for current platform |
+
+### Manual Commands
+
+```bash
 # Run with info logging (less verbose)
 RUST_LOG=info npm run tauri dev
 
@@ -326,6 +371,17 @@ cargo clippy --manifest-path src-tauri/Cargo.toml
 
 # Format code
 cargo fmt --manifest-path src-tauri/Cargo.toml
+```
+
+### Troubleshooting
+
+**Locale changes not reflected?**
+
+The `rust_i18n` crate compiles translations at build time. If you modify locale files (`src-tauri/locales/*.yml`), you need a clean rebuild:
+
+```bash
+./scripts/rebuild.sh
+./scripts/dev.sh
 ```
 
 ### Project Structure

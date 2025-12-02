@@ -27,6 +27,12 @@ pub struct Config {
     /// Locale override (e.g., "en", "de"). If None, uses system locale.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+    /// Enable file logging. Default: false (disabled)
+    #[serde(default)]
+    pub logging_enabled: bool,
+    /// Log level (trace, debug, info, warn, error). Default: info. Only used when logging_enabled is true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
 }
 
 impl Default for Config {
@@ -41,6 +47,8 @@ impl Default for Config {
             sync_mode: "twoWay".to_string(),
             auto_start: true,
             locale: None,
+            logging_enabled: false,
+            log_level: None,
         }
     }
 }
@@ -122,6 +130,18 @@ mod tests {
     }
 
     #[test]
+    fn test_config_default_logging_enabled_is_false() {
+        let config = Config::default();
+        assert!(!config.logging_enabled);
+    }
+
+    #[test]
+    fn test_config_default_log_level_is_none() {
+        let config = Config::default();
+        assert!(config.log_level.is_none());
+    }
+
+    #[test]
     fn test_config_default_local_path_ends_with_filen() {
         let config = Config::default();
         assert!(config.local_path.ends_with("Filen"));
@@ -137,6 +157,8 @@ mod tests {
             sync_mode: "localToCloud".to_string(),
             auto_start: false,
             locale: Some("de".to_string()),
+            logging_enabled: true,
+            log_level: Some("debug".to_string()),
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -147,6 +169,8 @@ mod tests {
         assert_eq!(deserialized.sync_mode, config.sync_mode);
         assert_eq!(deserialized.auto_start, config.auto_start);
         assert_eq!(deserialized.locale, config.locale);
+        assert_eq!(deserialized.logging_enabled, config.logging_enabled);
+        assert_eq!(deserialized.log_level, config.log_level);
     }
 
     #[test]
@@ -157,6 +181,8 @@ mod tests {
             sync_mode: "twoWay".to_string(),
             auto_start: true,
             locale: None,
+            logging_enabled: false,
+            log_level: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -166,12 +192,14 @@ mod tests {
         assert!(json.contains("remotePath"));
         assert!(json.contains("syncMode"));
         assert!(json.contains("autoStart"));
+        assert!(json.contains("loggingEnabled"));
 
         // Should NOT contain snake_case
         assert!(!json.contains("local_path"));
         assert!(!json.contains("remote_path"));
         assert!(!json.contains("sync_mode"));
         assert!(!json.contains("auto_start"));
+        assert!(!json.contains("logging_enabled"));
     }
 
     #[test]
@@ -182,6 +210,8 @@ mod tests {
             sync_mode: "twoWay".to_string(),
             auto_start: true,
             locale: None,
+            logging_enabled: false,
+            log_level: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -196,6 +226,8 @@ mod tests {
             sync_mode: "twoWay".to_string(),
             auto_start: true,
             locale: Some("en".to_string()),
+            logging_enabled: false,
+            log_level: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -236,6 +268,8 @@ mod tests {
             sync_mode: "localBackup".to_string(),
             auto_start: false,
             locale: Some("fr".to_string()),
+            logging_enabled: true,
+            log_level: Some("debug".to_string()),
         };
 
         // Save directly to temp path
@@ -266,6 +300,8 @@ mod tests {
             sync_mode: "twoWay".to_string(),
             auto_start: true,
             locale: None,
+            logging_enabled: false,
+            log_level: None,
         };
 
         // Directory should not exist yet
@@ -290,6 +326,8 @@ mod tests {
             sync_mode: "twoWay".to_string(),
             auto_start: true,
             locale: None,
+            logging_enabled: false,
+            log_level: None,
         };
 
         // Should succeed even if directory already exists
