@@ -103,7 +103,8 @@ impl CurrentTransfer {
         ((self.bytes as f64 / self.size as f64) * 100.0).min(100.0) as u8
     }
 
-    /// Format for display: "↑ filename.pdf (45%)" or "↓ filename.pdf (45%)"
+    /// Format for display: "↑ filename.pdf" or "↓ filename.pdf"
+    /// Note: Percentage removed as Filen CLI doesn't report cumulative progress
     pub fn display_text(&self, max_filename_len: usize) -> String {
         let arrow = match self.direction {
             TransferDirection::Upload => "↑",
@@ -116,7 +117,7 @@ impl CurrentTransfer {
             self.filename.clone()
         };
 
-        format!("{} {} ({}%)", arrow, filename, self.progress_percent())
+        format!("{} {}", arrow, filename)
     }
 }
 
@@ -294,12 +295,16 @@ mod tests {
     }
 
     #[test]
-    fn test_display_text_percentage_format() {
+    fn test_display_text_no_percentage() {
+        // Percentage was removed since Filen CLI doesn't report cumulative progress
         let mut transfer =
             CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 100);
         transfer.bytes = 45;
         let text = transfer.display_text(50);
-        assert!(text.contains("(45%)"));
+        // Should NOT contain percentage
+        assert!(!text.contains("%"));
+        // Should still contain the filename
+        assert!(text.contains("file.txt"));
     }
 
     // ==================== SyncState tests ====================
