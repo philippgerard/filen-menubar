@@ -4,11 +4,48 @@ use super::{TrayAction, TrayInterface};
 use crate::state::{CurrentTransfer, SyncState};
 use std::sync::{Arc, RwLock};
 use tauri::{
+    image::Image,
     menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder},
     tray::{TrayIcon, TrayIconBuilder},
     AppHandle,
 };
 use tokio::sync::mpsc;
+
+// Embed tray icons at compile time (using @2x Retina versions for crisp display)
+const ICON_IDLE: &[u8] = include_bytes!("../../icons/tray/idle@2x.png");
+const ICON_ERROR: &[u8] = include_bytes!("../../icons/tray/error@2x.png");
+const ICON_SYNCING_0: &[u8] = include_bytes!("../../icons/tray/syncing-0@2x.png");
+const ICON_SYNCING_1: &[u8] = include_bytes!("../../icons/tray/syncing-1@2x.png");
+const ICON_SYNCING_2: &[u8] = include_bytes!("../../icons/tray/syncing-2@2x.png");
+const ICON_SYNCING_3: &[u8] = include_bytes!("../../icons/tray/syncing-3@2x.png");
+
+/// Decode a PNG from bytes into RGBA data.
+/// Since we use template mode, macOS will automatically handle dark/light mode.
+/// The source PNGs should have black shapes on transparent background.
+fn decode_png(png_data: &[u8]) -> Option<Image<'static>> {
+    let img = image::load_from_memory(png_data).ok()?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(Image::new_owned(rgba.into_raw(), width, height))
+}
+
+/// Get the appropriate icon for the given sync state and animation frame
+fn get_icon_for_state(state: SyncState, animation_frame: u8) -> Option<Image<'static>> {
+    let png_data = match state {
+        SyncState::Synced | SyncState::Paused | SyncState::NotLoggedIn => ICON_IDLE,
+        SyncState::Error | SyncState::CliNotFound => ICON_ERROR,
+        SyncState::Starting | SyncState::Scanning | SyncState::Syncing => {
+            // Cycle through 4 frames for pulsing animation
+            match animation_frame % 4 {
+                0 => ICON_SYNCING_0,
+                1 => ICON_SYNCING_1,
+                2 => ICON_SYNCING_2,
+                _ => ICON_SYNCING_3,
+            }
+        }
+    };
+    decode_png(png_data)
+}
 
 /// Shared state for menu updates
 struct MenuState {
@@ -61,7 +98,7 @@ impl MacOsTray {
 
 impl TrayInterface for MacOsTray {
     fn update_icon(&self, state: SyncState, animation_frame: u8) {
-        let needs_update = {
+        let (needs_menu_update, needs_icon_update) = {
             let mut menu_state = self.state.write().unwrap();
             let state_changed = menu_state.sync_state != state;
             let frame_changed = menu_state.animation_frame != animation_frame;
@@ -73,23 +110,45 @@ impl TrayInterface for MacOsTray {
                 menu_state.animation_frame = animation_frame;
             }
 
-            // Update display if state changed, or if frame changed during Scanning/Starting
-            state_changed
+            // Determine if we need to update the menu text
+            let needs_menu = state_changed
                 || (frame_changed
-                    && (state == SyncState::Scanning || state == SyncState::Starting))
+                    && (state == SyncState::Scanning || state == SyncState::Starting));
+
+            // Determine if we need to update the icon
+            // For syncing states, update on every frame change for animation
+            // For other states, only update when state changes
+            let is_animating = state == SyncState::Starting
+                || state == SyncState::Scanning
+                || state == SyncState::Syncing;
+            let needs_icon = state_changed || (is_animating && frame_changed);
+
+            (needs_menu, needs_icon)
         };
 
-        if needs_update {
+        if needs_menu_update {
             // Update pending count display (may have animated dots)
             let state_read = self.state.read().unwrap();
-            let pending_text =
-                get_pending_text(state_read.sync_state, state_read.pending_count, animation_frame);
+            let pending_text = get_pending_text(
+                state_read.sync_state,
+                state_read.pending_count,
+                animation_frame,
+            );
             drop(state_read);
 
             let items = self.menu_items.read().unwrap();
             let _ = items.pending_item.set_text(&pending_text);
         }
-        // TODO: Update icon based on state when we have proper icons
+
+        if needs_icon_update {
+            // Update the tray icon based on state and animation frame
+            if let Some(icon) = get_icon_for_state(state, animation_frame) {
+                let _ = self.tray.set_icon(Some(icon));
+                // Re-enable template mode after changing the icon
+                // This ensures macOS properly inverts the icon for dark/light mode
+                let _ = self.tray.set_icon_as_template(true);
+            }
+        }
     }
 
     fn update_status(&self, text: &str) {
@@ -346,18 +405,19 @@ pub fn create_tray(
         initial_state.current_transfer_text.as_deref(),
     )?;
 
-    // Create tray icon
+    // Create tray icon with our custom monochrome icon
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip(rust_i18n::t!("tooltip.app_name"));
 
-    // Try to use the default window icon if available
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    // Use our custom syncing icon (Starting state) as the initial icon
+    if let Some(icon) = get_icon_for_state(SyncState::Starting, 0) {
+        builder = builder.icon(icon);
     }
 
     // Enable template icon for macOS dark/light mode support
+    // This makes the icon automatically adapt to light/dark menu bar
     builder = builder.icon_as_template(true);
 
     let tray = builder.build(app)?;

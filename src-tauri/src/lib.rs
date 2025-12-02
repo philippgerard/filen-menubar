@@ -194,8 +194,9 @@ async fn status_update_loop(
         }
 
         tray.update_status(&sync_state.status_text());
-        // Animation frame cycles 0, 1, 2 for loading indicators
-        let animation_frame = (tick_count % 3) as u8;
+        // Animation frame cycles 0-3 for pulsing icon animation
+        // (macOS uses 4 frames, Linux uses mod 3 internally for its own animation)
+        let animation_frame = (tick_count % 4) as u8;
         tray.update_icon(sync_state, animation_frame);
 
         // Update pending file count

@@ -25,6 +25,7 @@ log = "0.4"
 fern = "0.7"
 chrono = "0.4"
 open = "5"
+image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-dialog = "2.4.2"
 rust-i18n = "3"
 sys-locale = "0.3"
