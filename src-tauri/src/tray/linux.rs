@@ -11,6 +11,8 @@ struct LinuxTrayState {
     sync_state: SyncState,
     status_text: String,
     pending_count: u32,
+    /// Animation frame for loading indicators (0, 1, 2)
+    animation_frame: u8,
     /// Login state: None = starting/unknown, Some(true) = logged in, Some(false) = not logged in
     login_state: Option<bool>,
     /// Current transfer display text (None = hidden)
@@ -37,9 +39,10 @@ impl LinuxTray {
 }
 
 impl TrayInterface for LinuxTray {
-    fn update_icon(&self, state: SyncState) {
+    fn update_icon(&self, state: SyncState, animation_frame: u8) {
         if let Ok(mut s) = self.state.write() {
             s.sync_state = state;
+            s.animation_frame = animation_frame;
         }
         self.trigger_update();
     }
@@ -116,14 +119,19 @@ impl Tray for FilenTray {
             .unwrap_or_else(|| "Unknown".to_string());
         let sync_state = state.as_ref().map(|s| s.sync_state).unwrap_or_default();
         let pending_count = state.as_ref().map(|s| s.pending_count).unwrap_or(0);
+        let animation_frame = state.as_ref().map(|s| s.animation_frame).unwrap_or(0);
         let login_state = state.as_ref().and_then(|s| s.login_state);
         let current_transfer_text = state.as_ref().and_then(|s| s.current_transfer_text.clone());
 
         // Pending count text (matches macOS behavior)
-        // During Scanning/Starting, we don't know the pending count yet
+        // During Scanning/Starting, show animated dots
         let pending_text = if sync_state == SyncState::Scanning || sync_state == SyncState::Starting
         {
-            rust_i18n::t!("menu.checking").to_string()
+            match animation_frame % 3 {
+                0 => ".".to_string(),
+                1 => "..".to_string(),
+                _ => "...".to_string(),
+            }
         } else if pending_count > 0 {
             if pending_count == 1 {
                 rust_i18n::t!("menu.file_remaining").to_string()
@@ -297,6 +305,7 @@ pub async fn create_tray(
         sync_state: SyncState::Starting,
         status_text: rust_i18n::t!("status.starting").to_string(),
         pending_count: 0,
+        animation_frame: 0,
         login_state: None, // Starting state - unknown login status
         current_transfer_text: None,
         action_tx,

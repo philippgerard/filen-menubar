@@ -26,7 +26,8 @@ pub enum TrayAction {
 /// Platform-agnostic tray interface
 pub trait TrayInterface: Send + Sync {
     /// Update the tray icon based on sync state
-    fn update_icon(&self, state: SyncState);
+    /// `animation_frame` is used to animate loading indicators (cycles 0, 1, 2)
+    fn update_icon(&self, state: SyncState, animation_frame: u8);
 
     /// Update the status text in the menu
     fn update_status(&self, text: &str);

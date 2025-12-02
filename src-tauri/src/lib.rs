@@ -194,7 +194,9 @@ async fn status_update_loop(
         }
 
         tray.update_status(&sync_state.status_text());
-        tray.update_icon(sync_state);
+        // Animation frame cycles 0, 1, 2 for loading indicators
+        let animation_frame = (tick_count % 3) as u8;
+        tray.update_icon(sync_state, animation_frame);
 
         // Update pending file count
         let pending_count = app_state.get_pending_count().await;
@@ -379,7 +381,7 @@ pub fn run() {
                     tray_for_autostart.set_login_state(Some(ls));
                 }
                 tray_for_autostart.update_status(&new_state.status_text());
-                tray_for_autostart.update_icon(new_state);
+                tray_for_autostart.update_icon(new_state, 0);
 
                 log::info!("Initialization complete, state: {:?}", new_state);
 

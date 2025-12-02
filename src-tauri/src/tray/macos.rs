@@ -17,6 +17,8 @@ struct MenuState {
     status_text: String,
     sync_state: SyncState,
     pending_count: u32,
+    /// Animation frame for loading indicators (0, 1, 2)
+    animation_frame: u8,
     /// Current transfer display text (None = hidden)
     current_transfer_text: Option<String>,
 }
@@ -47,6 +49,7 @@ impl MacOsTray {
             &state.status_text,
             state.sync_state,
             state.pending_count,
+            state.animation_frame,
             state.login_state,
             state.current_transfer_text.as_deref(),
         ) {
@@ -57,21 +60,30 @@ impl MacOsTray {
 }
 
 impl TrayInterface for MacOsTray {
-    fn update_icon(&self, state: SyncState) {
+    fn update_icon(&self, state: SyncState, animation_frame: u8) {
         let needs_update = {
             let mut menu_state = self.state.write().unwrap();
-            if menu_state.sync_state != state {
+            let state_changed = menu_state.sync_state != state;
+            let frame_changed = menu_state.animation_frame != animation_frame;
+
+            if state_changed {
                 menu_state.sync_state = state;
-                true
-            } else {
-                false
             }
+            if frame_changed {
+                menu_state.animation_frame = animation_frame;
+            }
+
+            // Update display if state changed, or if frame changed during Scanning/Starting
+            state_changed
+                || (frame_changed
+                    && (state == SyncState::Scanning || state == SyncState::Starting))
         };
 
         if needs_update {
-            // Sync state changed - update pending count display
+            // Update pending count display (may have animated dots)
             let state_read = self.state.read().unwrap();
-            let pending_text = get_pending_text(state_read.sync_state, state_read.pending_count);
+            let pending_text =
+                get_pending_text(state_read.sync_state, state_read.pending_count, animation_frame);
             drop(state_read);
 
             let items = self.menu_items.read().unwrap();
@@ -134,7 +146,7 @@ impl TrayInterface for MacOsTray {
         let _ = self.tray.set_tooltip(Some(&tooltip));
 
         // Update menu item text in-place (doesn't close menu)
-        let pending_text = get_pending_text(state.sync_state, count);
+        let pending_text = get_pending_text(state.sync_state, count, state.animation_frame);
         drop(state);
         let items = self.menu_items.read().unwrap();
         let _ = items.pending_item.set_text(&pending_text);
@@ -185,11 +197,20 @@ impl TrayInterface for MacOsTray {
     }
 }
 
+/// Get the animated dots for loading states
+fn get_animated_dots(animation_frame: u8) -> &'static str {
+    match animation_frame % 3 {
+        0 => ".",
+        1 => "..",
+        _ => "...",
+    }
+}
+
 /// Get the pending count text based on sync state and count
-fn get_pending_text(sync_state: SyncState, pending_count: u32) -> String {
-    // During Scanning/Starting, we don't know the pending count yet
+fn get_pending_text(sync_state: SyncState, pending_count: u32, animation_frame: u8) -> String {
+    // During Scanning/Starting, we don't know the pending count yet - show animated dots
     if sync_state == SyncState::Scanning || sync_state == SyncState::Starting {
-        return rust_i18n::t!("menu.checking").to_string();
+        return get_animated_dots(animation_frame).to_string();
     }
 
     if pending_count > 0 {
@@ -209,6 +230,7 @@ fn build_menu(
     status_text: &str,
     sync_state: SyncState,
     pending_count: u32,
+    animation_frame: u8,
     login_state: Option<bool>,
     current_transfer_text: Option<&str>,
 ) -> Result<(Menu<tauri::Wry>, MenuItems), Box<dyn std::error::Error>> {
@@ -222,7 +244,7 @@ fn build_menu(
     builder = builder.item(&status_item);
 
     // Pending file count (always present)
-    let pending_text = get_pending_text(sync_state, pending_count);
+    let pending_text = get_pending_text(sync_state, pending_count, animation_frame);
     let pending_item = MenuItemBuilder::with_id("pending_count", &pending_text)
         .enabled(false)
         .build(app)?;
@@ -309,6 +331,7 @@ pub fn create_tray(
         status_text: initial_status.clone(),
         sync_state: SyncState::Starting,
         pending_count: 0,
+        animation_frame: 0,
         current_transfer_text: None,
     };
 
@@ -318,6 +341,7 @@ pub fn create_tray(
         &initial_state.status_text,
         initial_state.sync_state,
         initial_state.pending_count,
+        initial_state.animation_frame,
         initial_state.login_state,
         initial_state.current_transfer_text.as_deref(),
     )?;
