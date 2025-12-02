@@ -146,27 +146,27 @@ impl TrayInterface for MacOsTray {
     fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>) {
         let new_text = transfer.map(|t| t.display_text(25));
 
-        {
+        let needs_rebuild = {
             let mut state = self.state.write().unwrap();
+            let old_had_transfer = state.current_transfer_text.is_some();
+            let new_has_transfer = new_text.is_some();
+
             if state.current_transfer_text != new_text {
                 state.current_transfer_text = new_text.clone();
+                // Need to rebuild menu if transfer item visibility changed
+                old_had_transfer != new_has_transfer
             } else {
                 return; // No change
             }
-        }
+        };
 
-        // Update the transfer menu item text in-place
-        let items = self.menu_items.read().unwrap();
-        match new_text {
-            Some(text) => {
-                let _ = items.transfer_item.set_text(&text);
-                let _ = items.transfer_item.set_enabled(true); // Make visible by enabling
-            }
-            None => {
-                // Hide the item by setting empty text (Tauri doesn't support hiding items)
-                let _ = items.transfer_item.set_text("");
-                let _ = items.transfer_item.set_enabled(false);
-            }
+        if needs_rebuild {
+            // Transfer started or stopped - rebuild menu to add/remove the item
+            self.rebuild_menu();
+        } else if let Some(text) = new_text {
+            // Just update the text in-place (progress changed)
+            let items = self.menu_items.read().unwrap();
+            let _ = items.transfer_item.set_text(&text);
         }
     }
 }
@@ -203,16 +203,15 @@ fn build_menu(
         .build(app)?;
     builder = builder.item(&pending_item);
 
-    // Current transfer (always added to menu, but hidden when no transfer is active)
-    // We must always add it so update_current_transfer can show/hide it later
-    let (transfer_text, transfer_visible) = match current_transfer_text {
-        Some(text) => (text.to_string(), true),
-        None => (String::new(), false),
-    };
-    let transfer_item = MenuItemBuilder::with_id("current_transfer", &transfer_text)
-        .enabled(transfer_visible)
+    // Current transfer (only added when there's an active transfer)
+    // Menu is rebuilt when transfer starts/stops to add/remove this item
+    let transfer_text = current_transfer_text.unwrap_or("");
+    let transfer_item = MenuItemBuilder::with_id("current_transfer", transfer_text)
+        .enabled(false)
         .build(app)?;
-    builder = builder.item(&transfer_item);
+    if current_transfer_text.is_some() {
+        builder = builder.item(&transfer_item);
+    }
 
     builder = builder.separator();
 

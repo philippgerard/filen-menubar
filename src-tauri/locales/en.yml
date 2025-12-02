@@ -3,7 +3,7 @@ _version: 1
 # Menu items
 menu:
   status: "Status: %{status}"
-  up_to_date: "Up to date"
+  up_to_date: "All files synced"
   files_remaining: "%{count} files remaining..."
   file_remaining: "1 file remaining..."
   open_local_folder: "Open Local Folder"
