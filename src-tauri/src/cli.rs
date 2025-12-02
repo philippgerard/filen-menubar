@@ -19,8 +19,8 @@ struct DeltasCountData {
 /// Nested data for transfer event
 #[derive(Debug, Deserialize)]
 struct TransferData {
+    /// The result type: "success", "error", etc.
     #[serde(rename = "type")]
-    #[allow(dead_code)]
     transfer_type: Option<String>,
     #[allow(dead_code)]
     #[serde(rename = "relativePath")]
@@ -50,10 +50,7 @@ enum CliEvent {
     DeltasCount { data: DeltasCountData },
 
     #[serde(rename = "transfer")]
-    Transfer {
-        #[allow(dead_code)]
-        data: Option<TransferData>,
-    },
+    Transfer { data: Option<TransferData> },
 
     #[serde(rename = "success")]
     Success {
@@ -303,19 +300,37 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
                 state.set_sync_state(SyncState::Syncing).await;
             }
         }
-        CliEvent::Transfer { .. }
-        | CliEvent::UploadProgress { .. }
-        | CliEvent::DownloadProgress { .. } => {
+        CliEvent::Transfer { data } => {
+            // Check if this transfer completed successfully
+            if let Some(ref transfer_data) = data {
+                if transfer_data.transfer_type.as_deref() == Some("success") {
+                    let current = state.get_pending_count().await;
+                    if current > 0 {
+                        let new_count = current - 1;
+                        log::debug!("Transfer complete, {} files remaining", new_count);
+                        state.set_pending_count(new_count).await;
+                    }
+                }
+            }
+            // Ensure we're in syncing state while transfers are happening
+            if state.get_sync_state().await != SyncState::Syncing {
+                log::info!("File transfer in progress");
+                state.set_sync_state(SyncState::Syncing).await;
+            }
+        }
+        CliEvent::UploadProgress { .. } | CliEvent::DownloadProgress { .. } => {
             if state.get_sync_state().await != SyncState::Syncing {
                 log::info!("File transfer in progress");
                 state.set_sync_state(SyncState::Syncing).await;
             }
         }
         CliEvent::Success { .. } => {
+            // Note: Success events are typically embedded in Transfer events as data.type="success"
+            // This handles any standalone success events
             let current = state.get_pending_count().await;
             if current > 0 {
                 let new_count = current - 1;
-                log::info!("Transfer complete, {} files remaining", new_count);
+                log::debug!("Transfer complete (standalone), {} files remaining", new_count);
                 state.set_pending_count(new_count).await;
             }
         }
