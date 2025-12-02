@@ -16,11 +16,11 @@ menu:
 
 # Sync states
 status:
-  starting: "Wird gestartet..."
+  starting: "Wird gestartet"
   not_logged_in: "Nicht angemeldet"
   synced: "Synchronisiert"
-  scanning: "Überprüfe Dateien..."
-  syncing: "Synchronisiere..."
+  scanning: "Überprüfe Dateien"
+  syncing: "Synchronisiere"
   paused: "Pausiert"
   error: "Synchronisierungsfehler"
   cli_not_found: "CLI nicht gefunden"
