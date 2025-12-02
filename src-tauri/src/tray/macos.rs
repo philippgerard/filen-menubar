@@ -15,6 +15,7 @@ struct MenuState {
     /// Login state: None = starting/unknown, Some(true) = logged in, Some(false) = not logged in
     login_state: Option<bool>,
     status_text: String,
+    sync_state: SyncState,
     pending_count: u32,
     /// Current transfer display text (None = hidden)
     current_transfer_text: Option<String>,
@@ -44,6 +45,7 @@ impl MacOsTray {
         if let Ok((menu, items)) = build_menu(
             &self.app,
             &state.status_text,
+            state.sync_state,
             state.pending_count,
             state.login_state,
             state.current_transfer_text.as_deref(),
@@ -55,7 +57,26 @@ impl MacOsTray {
 }
 
 impl TrayInterface for MacOsTray {
-    fn update_icon(&self, _state: SyncState) {
+    fn update_icon(&self, state: SyncState) {
+        let needs_update = {
+            let mut menu_state = self.state.write().unwrap();
+            if menu_state.sync_state != state {
+                menu_state.sync_state = state;
+                true
+            } else {
+                false
+            }
+        };
+
+        if needs_update {
+            // Sync state changed - update pending count display
+            let state_read = self.state.read().unwrap();
+            let pending_text = get_pending_text(state_read.sync_state, state_read.pending_count);
+            drop(state_read);
+
+            let items = self.menu_items.read().unwrap();
+            let _ = items.pending_item.set_text(&pending_text);
+        }
         // TODO: Update icon based on state when we have proper icons
     }
 
@@ -113,16 +134,9 @@ impl TrayInterface for MacOsTray {
         let _ = self.tray.set_tooltip(Some(&tooltip));
 
         // Update menu item text in-place (doesn't close menu)
+        let pending_text = get_pending_text(state.sync_state, count);
+        drop(state);
         let items = self.menu_items.read().unwrap();
-        let pending_text = if count > 0 {
-            if count == 1 {
-                rust_i18n::t!("menu.file_remaining").to_string()
-            } else {
-                rust_i18n::t!("menu.files_remaining", count = count).to_string()
-            }
-        } else {
-            rust_i18n::t!("menu.up_to_date").to_string()
-        };
         let _ = items.pending_item.set_text(&pending_text);
     }
 
@@ -171,10 +185,29 @@ impl TrayInterface for MacOsTray {
     }
 }
 
+/// Get the pending count text based on sync state and count
+fn get_pending_text(sync_state: SyncState, pending_count: u32) -> String {
+    // During Scanning/Starting, we don't know the pending count yet
+    if sync_state == SyncState::Scanning || sync_state == SyncState::Starting {
+        return rust_i18n::t!("menu.checking").to_string();
+    }
+
+    if pending_count > 0 {
+        if pending_count == 1 {
+            rust_i18n::t!("menu.file_remaining").to_string()
+        } else {
+            rust_i18n::t!("menu.files_remaining", count = pending_count).to_string()
+        }
+    } else {
+        rust_i18n::t!("menu.up_to_date").to_string()
+    }
+}
+
 /// Build the tray menu with current state
 fn build_menu(
     app: &AppHandle,
     status_text: &str,
+    sync_state: SyncState,
     pending_count: u32,
     login_state: Option<bool>,
     current_transfer_text: Option<&str>,
@@ -189,15 +222,7 @@ fn build_menu(
     builder = builder.item(&status_item);
 
     // Pending file count (always present)
-    let pending_text = if pending_count > 0 {
-        if pending_count == 1 {
-            rust_i18n::t!("menu.file_remaining").to_string()
-        } else {
-            rust_i18n::t!("menu.files_remaining", count = pending_count).to_string()
-        }
-    } else {
-        rust_i18n::t!("menu.up_to_date").to_string()
-    };
+    let pending_text = get_pending_text(sync_state, pending_count);
     let pending_item = MenuItemBuilder::with_id("pending_count", &pending_text)
         .enabled(false)
         .build(app)?;
@@ -282,6 +307,7 @@ pub fn create_tray(
     let initial_state = MenuState {
         login_state: None, // Starting state - unknown login status
         status_text: initial_status.clone(),
+        sync_state: SyncState::Starting,
         pending_count: 0,
         current_transfer_text: None,
     };
@@ -290,6 +316,7 @@ pub fn create_tray(
     let (menu, menu_items) = build_menu(
         app,
         &initial_state.status_text,
+        initial_state.sync_state,
         initial_state.pending_count,
         initial_state.login_state,
         initial_state.current_transfer_text.as_deref(),

@@ -114,12 +114,17 @@ impl Tray for FilenTray {
             .as_ref()
             .map(|s| s.status_text.clone())
             .unwrap_or_else(|| "Unknown".to_string());
+        let sync_state = state.as_ref().map(|s| s.sync_state).unwrap_or_default();
         let pending_count = state.as_ref().map(|s| s.pending_count).unwrap_or(0);
         let login_state = state.as_ref().and_then(|s| s.login_state);
         let current_transfer_text = state.as_ref().and_then(|s| s.current_transfer_text.clone());
 
         // Pending count text (matches macOS behavior)
-        let pending_text = if pending_count > 0 {
+        // During Scanning/Starting, we don't know the pending count yet
+        let pending_text = if sync_state == SyncState::Scanning || sync_state == SyncState::Starting
+        {
+            rust_i18n::t!("menu.checking").to_string()
+        } else if pending_count > 0 {
             if pending_count == 1 {
                 rust_i18n::t!("menu.file_remaining").to_string()
             } else {
