@@ -373,6 +373,41 @@ cargo clippy --manifest-path src-tauri/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml
 ```
 
+### Building a Notarized macOS Release
+
+To build a signed and notarized macOS release locally:
+
+1. **Prerequisites:**
+   - Apple Developer ID Application certificate installed in Keychain
+   - App-specific password from [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords
+
+2. **Create a `.env` file** (already gitignored):
+
+   ```bash
+   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAM_ID)"
+   export APPLE_ID="your-apple-id@email.com"
+   export APPLE_TEAM_ID="YOUR_TEAM_ID"
+   export APPLE_PASSWORD="xxxx-xxxx-xxxx-xxxx"  # App-specific password
+   ```
+
+3. **Build:**
+
+   ```bash
+   source .env && npm run tauri build -- --target aarch64-apple-darwin
+   ```
+
+4. **Output:** The signed and notarized DMG will be at:
+   ```
+   src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Filen Menubar_<version>_aarch64.dmg
+   ```
+
+5. **Verify notarization:**
+
+   ```bash
+   spctl -a -vvv "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Filen Menubar.app"
+   # Should show: source=Notarized Developer ID
+   ```
+
 ### Troubleshooting
 
 **Locale changes not reflected?**
