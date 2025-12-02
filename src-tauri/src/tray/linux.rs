@@ -93,6 +93,7 @@ impl Tray for FilenTray {
         let state = self.state.read().map(|s| s.sync_state).unwrap_or_default();
         match state {
             SyncState::Starting
+            | SyncState::Scanning
             | SyncState::Synced
             | SyncState::NotLoggedIn
             | SyncState::Paused => "folder-sync".to_string(),
