@@ -18,6 +18,7 @@ status:
   starting: "Wird gestartet..."
   not_logged_in: "Nicht angemeldet"
   synced: "Synchronisiert"
+  scanning: "Überprüfe Dateien..."
   syncing: "Synchronisiere..."
   paused: "Pausiert"
   error: "Synchronisierungsfehler"

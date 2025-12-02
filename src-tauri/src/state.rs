@@ -12,6 +12,8 @@ pub enum SyncState {
     NotLoggedIn,
     /// Successfully synced, idle
     Synced,
+    /// Scanning local and remote file trees to find changes
+    Scanning,
     /// Currently syncing files
     Syncing,
     /// Sync paused
@@ -29,6 +31,7 @@ impl SyncState {
             SyncState::Starting => rust_i18n::t!("status.starting").to_string(),
             SyncState::NotLoggedIn => rust_i18n::t!("status.not_logged_in").to_string(),
             SyncState::Synced => rust_i18n::t!("status.synced").to_string(),
+            SyncState::Scanning => rust_i18n::t!("status.scanning").to_string(),
             SyncState::Syncing => rust_i18n::t!("status.syncing").to_string(),
             SyncState::Paused => rust_i18n::t!("status.paused").to_string(),
             SyncState::Error => rust_i18n::t!("status.error").to_string(),
@@ -43,6 +46,7 @@ impl SyncState {
             SyncState::Starting => "idle",
             SyncState::NotLoggedIn => "idle",
             SyncState::Synced => "idle",
+            SyncState::Scanning => "syncing",
             SyncState::Syncing => "syncing",
             SyncState::Paused => "idle",
             SyncState::Error => "error",
@@ -309,6 +313,7 @@ mod tests {
             SyncState::Starting,
             SyncState::NotLoggedIn,
             SyncState::Synced,
+            SyncState::Scanning,
             SyncState::Syncing,
             SyncState::Paused,
             SyncState::Error,
@@ -342,6 +347,7 @@ mod tests {
             );
         }
 
+        assert_eq!(SyncState::Scanning.icon_suffix(), "syncing");
         assert_eq!(SyncState::Syncing.icon_suffix(), "syncing");
         assert_eq!(SyncState::Error.icon_suffix(), "error");
         assert_eq!(SyncState::CliNotFound.icon_suffix(), "error");

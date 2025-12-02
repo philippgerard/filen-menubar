@@ -18,6 +18,7 @@ status:
   starting: "Starting..."
   not_logged_in: "Not Logged In"
   synced: "Synced"
+  scanning: "Scanning..."
   syncing: "Syncing..."
   paused: "Paused"
   error: "Sync Error"

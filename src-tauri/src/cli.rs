@@ -41,6 +41,12 @@ enum CliEvent {
     #[serde(rename = "cycleStarted")]
     CycleStarted,
 
+    #[serde(rename = "cycleGettingTreesStarted")]
+    CycleGettingTreesStarted,
+
+    #[serde(rename = "cycleGettingTreesDone")]
+    CycleGettingTreesDone,
+
     #[serde(rename = "cycleProcessingTasksStarted")]
     CycleProcessingTasksStarted,
 
@@ -297,6 +303,18 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
     match event {
         CliEvent::CycleStarted => {
             // Don't set syncing on cycleStarted - cycles run frequently even when idle
+        }
+        CliEvent::CycleGettingTreesStarted => {
+            // Scanning local and remote file trees - show scanning status
+            let current = state.get_sync_state().await;
+            if current != SyncState::Scanning && current != SyncState::Syncing {
+                log::info!("Scanning file trees");
+                state.set_sync_state(SyncState::Scanning).await;
+            }
+        }
+        CliEvent::CycleGettingTreesDone => {
+            // Tree scanning complete - will transition to syncing if there are deltas
+            log::debug!("File tree scan complete");
         }
         CliEvent::CycleProcessingTasksStarted => {
             if state.get_sync_state().await != SyncState::Syncing {
@@ -739,6 +757,20 @@ mod tests {
         let json = r#"{"type":"cycleProcessingTasksStarted"}"#;
         let event: CliEvent = serde_json::from_str(json).unwrap();
         assert!(matches!(event, CliEvent::CycleProcessingTasksStarted));
+    }
+
+    #[test]
+    fn test_parse_cycle_getting_trees_started() {
+        let json = r#"{"type":"cycleGettingTreesStarted"}"#;
+        let event: CliEvent = serde_json::from_str(json).unwrap();
+        assert!(matches!(event, CliEvent::CycleGettingTreesStarted));
+    }
+
+    #[test]
+    fn test_parse_cycle_getting_trees_done() {
+        let json = r#"{"type":"cycleGettingTreesDone"}"#;
+        let event: CliEvent = serde_json::from_str(json).unwrap();
+        assert!(matches!(event, CliEvent::CycleGettingTreesDone));
     }
 
     #[test]
