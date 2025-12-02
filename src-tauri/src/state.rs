@@ -216,3 +216,208 @@ impl Default for AppState {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== CurrentTransfer tests ====================
+
+    #[test]
+    fn test_progress_percent_zero_size_file() {
+        let transfer = CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 0);
+        assert_eq!(transfer.progress_percent(), 0);
+    }
+
+    #[test]
+    fn test_progress_percent_partial() {
+        let mut transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 1000);
+        transfer.bytes = 500;
+        assert_eq!(transfer.progress_percent(), 50);
+    }
+
+    #[test]
+    fn test_progress_percent_complete() {
+        let mut transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 1000);
+        transfer.bytes = 1000;
+        assert_eq!(transfer.progress_percent(), 100);
+    }
+
+    #[test]
+    fn test_progress_percent_overflow_capped() {
+        let mut transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 1000);
+        transfer.bytes = 2000; // More than total size
+        assert_eq!(transfer.progress_percent(), 100);
+    }
+
+    #[test]
+    fn test_display_text_upload_arrow() {
+        let transfer = CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 100);
+        let text = transfer.display_text(50);
+        assert!(text.starts_with("↑"));
+    }
+
+    #[test]
+    fn test_display_text_download_arrow() {
+        let transfer =
+            CurrentTransfer::new(TransferDirection::Download, "file.txt".to_string(), 100);
+        let text = transfer.display_text(50);
+        assert!(text.starts_with("↓"));
+    }
+
+    #[test]
+    fn test_display_text_truncation() {
+        let transfer = CurrentTransfer::new(
+            TransferDirection::Upload,
+            "very_long_filename_that_exceeds_limit.txt".to_string(),
+            100,
+        );
+        let text = transfer.display_text(10);
+        assert!(text.contains("…"));
+        // Truncated part should be shorter than original
+        assert!(text.len() < "very_long_filename_that_exceeds_limit.txt".len() + 10);
+    }
+
+    #[test]
+    fn test_display_text_short_filename_no_truncation() {
+        let transfer = CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 100);
+        let text = transfer.display_text(50);
+        assert!(text.contains("file.txt"));
+        assert!(!text.contains("…"));
+    }
+
+    #[test]
+    fn test_display_text_percentage_format() {
+        let mut transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 100);
+        transfer.bytes = 45;
+        let text = transfer.display_text(50);
+        assert!(text.contains("(45%)"));
+    }
+
+    // ==================== SyncState tests ====================
+
+    #[test]
+    fn test_sync_state_status_text_not_empty() {
+        // Initialize i18n for tests
+        rust_i18n::set_locale("en");
+
+        let states = [
+            SyncState::Starting,
+            SyncState::NotLoggedIn,
+            SyncState::Synced,
+            SyncState::Syncing,
+            SyncState::Paused,
+            SyncState::Error,
+            SyncState::CliNotFound,
+        ];
+
+        for state in states {
+            let text = state.status_text();
+            assert!(
+                !text.is_empty(),
+                "Status text for {:?} should not be empty",
+                state
+            );
+        }
+    }
+
+    #[test]
+    fn test_sync_state_icon_suffix_valid_values() {
+        let idle_states = [
+            SyncState::Starting,
+            SyncState::NotLoggedIn,
+            SyncState::Synced,
+            SyncState::Paused,
+        ];
+        for state in idle_states {
+            assert_eq!(
+                state.icon_suffix(),
+                "idle",
+                "Expected 'idle' for {:?}",
+                state
+            );
+        }
+
+        assert_eq!(SyncState::Syncing.icon_suffix(), "syncing");
+        assert_eq!(SyncState::Error.icon_suffix(), "error");
+        assert_eq!(SyncState::CliNotFound.icon_suffix(), "error");
+    }
+
+    // ==================== StorageInfo tests ====================
+
+    #[test]
+    fn test_storage_info_format_zero() {
+        let info = StorageInfo { used: 0, total: 0 };
+        assert_eq!(info.format(), "0.0 / 0.0 GB");
+    }
+
+    #[test]
+    fn test_storage_info_format_gb() {
+        let info = StorageInfo {
+            used: 5_368_709_120,   // 5 GB
+            total: 10_737_418_240, // 10 GB
+        };
+        assert_eq!(info.format(), "5.0 / 10.0 GB");
+    }
+
+    #[test]
+    fn test_storage_info_format_fractional() {
+        let info = StorageInfo {
+            used: 1_610_612_736,  // 1.5 GB
+            total: 3_221_225_472, // 3 GB
+        };
+        assert_eq!(info.format(), "1.5 / 3.0 GB");
+    }
+
+    // ==================== AppState async tests ====================
+
+    #[tokio::test]
+    async fn test_app_state_initial_values() {
+        let state = AppState::new();
+        assert_eq!(state.get_sync_state().await, SyncState::Starting);
+        assert_eq!(state.get_pending_count().await, 0);
+        assert!(state.get_current_transfer().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_logged_in_false_changes_state() {
+        let state = AppState::new();
+        state.set_sync_state(SyncState::Synced).await;
+        state.set_logged_in(false).await;
+        assert_eq!(state.get_sync_state().await, SyncState::NotLoggedIn);
+    }
+
+    #[tokio::test]
+    async fn test_pending_count_roundtrip() {
+        let state = AppState::new();
+        state.set_pending_count(42).await;
+        assert_eq!(state.get_pending_count().await, 42);
+    }
+
+    #[tokio::test]
+    async fn test_current_transfer_roundtrip() {
+        let state = AppState::new();
+        let transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "document.pdf".to_string(), 1024);
+        state.set_current_transfer(Some(transfer.clone())).await;
+
+        let retrieved = state.get_current_transfer().await;
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.filename, "document.pdf");
+        assert_eq!(retrieved.size, 1024);
+    }
+
+    #[tokio::test]
+    async fn test_current_transfer_clear() {
+        let state = AppState::new();
+        let transfer = CurrentTransfer::new(TransferDirection::Upload, "file.txt".to_string(), 100);
+        state.set_current_transfer(Some(transfer)).await;
+        state.set_current_transfer(None).await;
+        assert!(state.get_current_transfer().await.is_none());
+    }
+}
