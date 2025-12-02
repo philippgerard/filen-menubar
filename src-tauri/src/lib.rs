@@ -324,7 +324,8 @@ pub fn run() {
                     if credentials_exist {
                         if config_for_autostart.auto_start {
                             log::info!("Found Filen CLI session, will auto-start sync");
-                            (SyncState::Syncing, Some(true))
+                            // Start with Scanning - CLI will update to Syncing when it finds deltas
+                            (SyncState::Scanning, Some(true))
                         } else {
                             log::info!("Found Filen CLI session, but auto_start is disabled");
                             (SyncState::Synced, Some(true))
@@ -369,7 +370,7 @@ pub fn run() {
                 log::info!("Initialization complete, state: {:?}", new_state);
 
                 // Start sync if needed (after state is set)
-                if new_state == SyncState::Syncing {
+                if new_state == SyncState::Scanning || new_state == SyncState::Syncing {
                     if let Err(e) = cli_manager_for_autostart
                         .start_sync(&config_for_autostart)
                         .await
