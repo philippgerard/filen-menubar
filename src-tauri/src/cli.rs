@@ -433,11 +433,12 @@ async fn handle_text_output(state: &AppState, line: &str) {
             state.set_sync_state(SyncState::Synced).await;
             state.set_pending_count(0).await;
         }
-    } else if line.starts_with("Syncing ")
-        && !line.contains('{')
-        && state.get_sync_state().await != SyncState::Syncing
-    {
-        state.set_sync_state(SyncState::Syncing).await;
+    } else if line.starts_with("Syncing ") && !line.contains('{') {
+        let current = state.get_sync_state().await;
+        // Don't override Scanning or Syncing states
+        if current != SyncState::Syncing && current != SyncState::Scanning {
+            state.set_sync_state(SyncState::Syncing).await;
+        }
     }
 }
 
@@ -550,8 +551,8 @@ impl CliManager {
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         *self.shutdown_tx.write().await = Some(shutdown_tx);
 
-        // Set initial state - we'll transition to Synced after initial sync completes
-        self.state.set_sync_state(SyncState::Syncing).await;
+        // Note: Initial state is already set by caller (lib.rs) to Scanning
+        // CLI events will update to Syncing when transfers begin, or Synced when done
 
         // Spawn output monitoring task
         let state = self.state.clone();
@@ -670,13 +671,12 @@ impl CliManager {
             let _ = tx.send(()).await;
         }
 
-        // Kill the process
+        // Kill the process - only set Paused if there was actually a process running
         if let Some(mut child) = self.process.write().await.take() {
             log::info!("Stopping sync process");
             let _ = child.kill().await;
+            self.state.set_sync_state(SyncState::Paused).await;
         }
-
-        self.state.set_sync_state(SyncState::Paused).await;
     }
 
     /// Check if sync is running
