@@ -292,7 +292,7 @@ pub fn create_tray(
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .tooltip(&rust_i18n::t!("tooltip.app_name").to_string());
+        .tooltip(rust_i18n::t!("tooltip.app_name"));
 
     // Try to use the default window icon if available
     if let Some(icon) = app.default_window_icon() {
