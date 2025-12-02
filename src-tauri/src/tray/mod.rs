@@ -9,7 +9,7 @@ mod macos;
 #[cfg(target_os = "linux")]
 mod linux;
 
-use crate::state::SyncState;
+use crate::state::{CurrentTransfer, SyncState};
 
 /// Tray menu action
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,11 @@ pub trait TrayInterface: Send + Sync {
     fn set_logged_in(&self, logged_in: bool) {
         self.set_login_state(Some(logged_in));
     }
+
+    /// Update the current transfer display
+    /// - None: No active transfer (hide the menu item)
+    /// - Some(transfer): Show current file being transferred with progress
+    fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>);
 }
 
 #[cfg(target_os = "macos")]

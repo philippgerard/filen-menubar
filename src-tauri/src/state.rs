@@ -60,6 +60,62 @@ pub struct StorageInfo {
     pub total: u64,
 }
 
+/// Direction of file transfer
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+/// Current file transfer information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrentTransfer {
+    /// Upload or download
+    pub direction: TransferDirection,
+    /// Filename (extracted from path)
+    pub filename: String,
+    /// Bytes transferred so far
+    pub bytes: u64,
+    /// Total file size
+    pub size: u64,
+}
+
+impl CurrentTransfer {
+    /// Create a new transfer
+    pub fn new(direction: TransferDirection, filename: String, size: u64) -> Self {
+        Self {
+            direction,
+            filename,
+            size,
+            bytes: 0,
+        }
+    }
+
+    /// Get progress as percentage (0-100)
+    pub fn progress_percent(&self) -> u8 {
+        if self.size == 0 {
+            return 0;
+        }
+        ((self.bytes as f64 / self.size as f64) * 100.0).min(100.0) as u8
+    }
+
+    /// Format for display: "↑ filename.pdf (45%)" or "↓ filename.pdf (45%)"
+    pub fn display_text(&self, max_filename_len: usize) -> String {
+        let arrow = match self.direction {
+            TransferDirection::Upload => "↑",
+            TransferDirection::Download => "↓",
+        };
+
+        let filename = if self.filename.len() > max_filename_len {
+            format!("{}…", &self.filename[..max_filename_len - 1])
+        } else {
+            self.filename.clone()
+        };
+
+        format!("{} {} ({}%)", arrow, filename, self.progress_percent())
+    }
+}
+
 impl StorageInfo {
     /// Format storage as human-readable string
     #[allow(dead_code)]
@@ -82,6 +138,7 @@ struct AppStateInner {
     storage_info: StorageInfo,
     is_logged_in: bool,
     pending_count: u32,
+    current_transfer: Option<CurrentTransfer>,
 }
 
 impl AppState {
@@ -92,6 +149,7 @@ impl AppState {
                 storage_info: StorageInfo::default(),
                 is_logged_in: false,
                 pending_count: 0,
+                current_transfer: None,
             })),
         }
     }
@@ -133,6 +191,23 @@ impl AppState {
 
     pub async fn set_pending_count(&self, count: u32) {
         self.inner.write().await.pending_count = count;
+    }
+
+    pub async fn get_current_transfer(&self) -> Option<CurrentTransfer> {
+        self.inner.read().await.current_transfer.clone()
+    }
+
+    pub async fn set_current_transfer(&self, transfer: Option<CurrentTransfer>) {
+        self.inner.write().await.current_transfer = transfer;
+    }
+
+    /// Update progress of the current transfer (bytes transferred)
+    #[allow(dead_code)]
+    pub async fn update_transfer_progress(&self, bytes: u64) {
+        let mut inner = self.inner.write().await;
+        if let Some(ref mut transfer) = inner.current_transfer {
+            transfer.bytes = bytes;
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! macOS tray implementation using Tauri's TrayIcon
 
 use super::{TrayAction, TrayInterface};
-use crate::state::SyncState;
+use crate::state::{CurrentTransfer, SyncState};
 use std::sync::{Arc, RwLock};
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder},
@@ -16,12 +16,15 @@ struct MenuState {
     login_state: Option<bool>,
     status_text: String,
     pending_count: u32,
+    /// Current transfer display text (None = hidden)
+    current_transfer_text: Option<String>,
 }
 
 /// Stored menu item references for in-place updates
 struct MenuItems {
     status_item: MenuItem<tauri::Wry>,
     pending_item: MenuItem<tauri::Wry>,
+    transfer_item: MenuItem<tauri::Wry>,
 }
 
 pub struct MacOsTray {
@@ -43,6 +46,7 @@ impl MacOsTray {
             &state.status_text,
             state.pending_count,
             state.login_state,
+            state.current_transfer_text.as_deref(),
         ) {
             let _ = self.tray.set_menu(Some(menu));
             *self.menu_items.write().unwrap() = items;
@@ -80,7 +84,9 @@ impl TrayInterface for MacOsTray {
 
         // Update menu item text in-place (doesn't close menu)
         let items = self.menu_items.read().unwrap();
-        let _ = items.status_item.set_text(rust_i18n::t!("menu.status", status = text));
+        let _ = items
+            .status_item
+            .set_text(rust_i18n::t!("menu.status", status = text));
     }
 
     fn update_pending_count(&self, count: u32) {
@@ -136,6 +142,33 @@ impl TrayInterface for MacOsTray {
         // Login/logout changes menu structure, so we need to rebuild
         self.rebuild_menu();
     }
+
+    fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>) {
+        let new_text = transfer.map(|t| t.display_text(25));
+
+        {
+            let mut state = self.state.write().unwrap();
+            if state.current_transfer_text != new_text {
+                state.current_transfer_text = new_text.clone();
+            } else {
+                return; // No change
+            }
+        }
+
+        // Update the transfer menu item text in-place
+        let items = self.menu_items.read().unwrap();
+        match new_text {
+            Some(text) => {
+                let _ = items.transfer_item.set_text(&text);
+                let _ = items.transfer_item.set_enabled(true); // Make visible by enabling
+            }
+            None => {
+                // Hide the item by setting empty text (Tauri doesn't support hiding items)
+                let _ = items.transfer_item.set_text("");
+                let _ = items.transfer_item.set_enabled(false);
+            }
+        }
+    }
 }
 
 /// Build the tray menu with current state
@@ -144,13 +177,15 @@ fn build_menu(
     status_text: &str,
     pending_count: u32,
     login_state: Option<bool>,
+    current_transfer_text: Option<&str>,
 ) -> Result<(Menu<tauri::Wry>, MenuItems), Box<dyn std::error::Error>> {
     let mut builder = MenuBuilder::new(app);
 
     // Status (disabled, just for display)
-    let status_item = MenuItemBuilder::with_id("status", rust_i18n::t!("menu.status", status = status_text))
-        .enabled(false)
-        .build(app)?;
+    let status_item =
+        MenuItemBuilder::with_id("status", rust_i18n::t!("menu.status", status = status_text))
+            .enabled(false)
+            .build(app)?;
     builder = builder.item(&status_item);
 
     // Pending file count (always present)
@@ -168,17 +203,28 @@ fn build_menu(
         .build(app)?;
     builder = builder.item(&pending_item);
 
+    // Current transfer (only shown when there's an active transfer)
+    let transfer_text = current_transfer_text.unwrap_or("");
+    let transfer_item = MenuItemBuilder::with_id("current_transfer", transfer_text)
+        .enabled(false)
+        .build(app)?;
+    // Only add to menu if there's a transfer in progress
+    if current_transfer_text.is_some() {
+        builder = builder.item(&transfer_item);
+    }
+
     builder = builder.separator();
 
     // Open Local Folder (enabled only when logged in)
-    let open_folder = MenuItemBuilder::with_id("open_folder", rust_i18n::t!("menu.open_local_folder"))
-        .enabled(login_state == Some(true))
-        .build(app)?;
+    let open_folder =
+        MenuItemBuilder::with_id("open_folder", rust_i18n::t!("menu.open_local_folder"))
+            .enabled(login_state == Some(true))
+            .build(app)?;
     builder = builder.item(&open_folder);
 
     // Open Web UI
-    let open_web_ui = MenuItemBuilder::with_id("open_web_ui", rust_i18n::t!("menu.open_web_ui"))
-        .build(app)?;
+    let open_web_ui =
+        MenuItemBuilder::with_id("open_web_ui", rust_i18n::t!("menu.open_web_ui")).build(app)?;
     builder = builder.item(&open_web_ui);
 
     builder = builder.separator();
@@ -186,11 +232,13 @@ fn build_menu(
     // Login or Logout based on state (hidden when None/starting)
     match login_state {
         Some(true) => {
-            let logout_item = MenuItemBuilder::with_id("logout", rust_i18n::t!("menu.logout")).build(app)?;
+            let logout_item =
+                MenuItemBuilder::with_id("logout", rust_i18n::t!("menu.logout")).build(app)?;
             builder = builder.item(&logout_item);
         }
         Some(false) => {
-            let login_item = MenuItemBuilder::with_id("login", rust_i18n::t!("menu.login")).build(app)?;
+            let login_item =
+                MenuItemBuilder::with_id("login", rust_i18n::t!("menu.login")).build(app)?;
             builder = builder.item(&login_item);
         }
         None => {
@@ -201,7 +249,8 @@ fn build_menu(
     builder = builder.separator();
 
     // Settings
-    let settings_item = MenuItemBuilder::with_id("settings", rust_i18n::t!("menu.settings")).build(app)?;
+    let settings_item =
+        MenuItemBuilder::with_id("settings", rust_i18n::t!("menu.settings")).build(app)?;
     builder = builder.item(&settings_item);
 
     // Quit
@@ -211,6 +260,7 @@ fn build_menu(
     let items = MenuItems {
         status_item,
         pending_item,
+        transfer_item,
     };
 
     Ok((builder.build()?, items))
@@ -226,6 +276,7 @@ pub fn create_tray(
         login_state: None, // Starting state - unknown login status
         status_text: initial_status.clone(),
         pending_count: 0,
+        current_transfer_text: None,
     };
 
     // Build initial menu
@@ -234,6 +285,7 @@ pub fn create_tray(
         &initial_state.status_text,
         initial_state.pending_count,
         initial_state.login_state,
+        initial_state.current_transfer_text.as_deref(),
     )?;
 
     // Create tray icon
