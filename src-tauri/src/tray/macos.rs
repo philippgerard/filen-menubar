@@ -203,15 +203,16 @@ fn build_menu(
         .build(app)?;
     builder = builder.item(&pending_item);
 
-    // Current transfer (only shown when there's an active transfer)
-    let transfer_text = current_transfer_text.unwrap_or("");
-    let transfer_item = MenuItemBuilder::with_id("current_transfer", transfer_text)
-        .enabled(false)
+    // Current transfer (always added to menu, but hidden when no transfer is active)
+    // We must always add it so update_current_transfer can show/hide it later
+    let (transfer_text, transfer_visible) = match current_transfer_text {
+        Some(text) => (text.to_string(), true),
+        None => (String::new(), false),
+    };
+    let transfer_item = MenuItemBuilder::with_id("current_transfer", &transfer_text)
+        .enabled(transfer_visible)
         .build(app)?;
-    // Only add to menu if there's a transfer in progress
-    if current_transfer_text.is_some() {
-        builder = builder.item(&transfer_item);
-    }
+    builder = builder.item(&transfer_item);
 
     builder = builder.separator();
 

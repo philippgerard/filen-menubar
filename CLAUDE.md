@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow
+
+- **Work directly on `main` branch** - no feature branches needed for this project
+- Commit and push changes directly to main
+
 ## Build Commands
 
 ```bash
