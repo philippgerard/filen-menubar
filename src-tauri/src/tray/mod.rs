@@ -19,6 +19,7 @@ pub enum TrayAction {
     Login,
     Logout,
     Settings,
+    ShowLogs,
     Quit,
 }
 

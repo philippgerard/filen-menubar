@@ -11,6 +11,7 @@ menu:
   login: "Login..."
   logout: "Logout"
   settings: "Settings..."
+  show_logs: "Show Logs..."
   quit: "Quit"
 
 # Sync states

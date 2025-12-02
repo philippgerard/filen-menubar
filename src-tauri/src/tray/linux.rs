@@ -135,6 +135,7 @@ impl Tray for FilenTray {
         let state_clone4 = self.state.clone();
         let state_clone5 = self.state.clone();
         let state_clone6 = self.state.clone();
+        let state_clone7 = self.state.clone();
 
         let mut items = vec![
             // Status (disabled, just for display)
@@ -248,12 +249,28 @@ impl Tray for FilenTray {
             .into(),
         );
 
+        // Show Logs
+        items.push(
+            StandardItem {
+                label: rust_i18n::t!("menu.show_logs").to_string(),
+                activate: Box::new(move |_| {
+                    if let Ok(s) = state_clone6.read() {
+                        let _ = s.action_tx.send(TrayAction::ShowLogs);
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        items.push(MenuItem::Separator);
+
         // Quit
         items.push(
             StandardItem {
                 label: rust_i18n::t!("menu.quit").to_string(),
                 activate: Box::new(move |_| {
-                    if let Ok(s) = state_clone6.read() {
+                    if let Ok(s) = state_clone7.read() {
                         let _ = s.action_tx.send(TrayAction::Quit);
                     }
                 }),
