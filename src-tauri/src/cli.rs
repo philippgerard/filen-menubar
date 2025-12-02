@@ -10,6 +10,23 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
 
+/// Nested data for deltasCount event
+#[derive(Debug, Deserialize)]
+struct DeltasCountData {
+    count: u32,
+}
+
+/// Nested data for transfer event
+#[derive(Debug, Deserialize)]
+struct TransferData {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    transfer_type: Option<String>,
+    #[allow(dead_code)]
+    #[serde(rename = "relativePath")]
+    relative_path: Option<String>,
+}
+
 /// CLI event types emitted in --verbose mode
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -24,15 +41,18 @@ enum CliEvent {
     CycleSuccess,
 
     #[serde(rename = "cycleError")]
-    CycleError { error: Option<String> },
+    CycleError {
+        #[allow(dead_code)]
+        error: Option<String>,
+    },
 
     #[serde(rename = "deltasCount")]
-    DeltasCount { count: u32 },
+    DeltasCount { data: DeltasCountData },
 
     #[serde(rename = "transfer")]
     Transfer {
         #[allow(dead_code)]
-        path: Option<String>,
+        data: Option<TransferData>,
     },
 
     #[serde(rename = "success")]
@@ -276,10 +296,10 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             state.set_sync_state(SyncState::Error).await;
             state.set_pending_count(0).await;
         }
-        CliEvent::DeltasCount { count } => {
-            state.set_pending_count(count).await;
-            if count > 0 {
-                log::info!("Syncing {} files", count);
+        CliEvent::DeltasCount { data } => {
+            state.set_pending_count(data.count).await;
+            if data.count > 0 {
+                log::info!("Syncing {} files", data.count);
                 state.set_sync_state(SyncState::Syncing).await;
             }
         }
