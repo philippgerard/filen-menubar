@@ -170,7 +170,8 @@ async fn status_update_loop(
     _cli_manager: Arc<CliManager>,
 ) {
     log::info!("Status update loop started");
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+    // Use shorter interval (500ms) for smoother progress updates during transfers
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
     let mut tick_count = 0u32;
 
     loop {
@@ -190,6 +191,10 @@ async fn status_update_loop(
         // Update pending file count
         let pending_count = app_state.get_pending_count().await;
         tray.update_pending_count(pending_count);
+
+        // Update current transfer display
+        let current_transfer = app_state.get_current_transfer().await;
+        tray.update_current_transfer(current_transfer.as_ref());
     }
 }
 
@@ -239,8 +244,9 @@ pub fn run() {
             // Create the tray icon
             // On Linux with ksni 0.3, the spawn is async, so we need block_on
             #[cfg(target_os = "linux")]
-            let tray = tauri::async_runtime::block_on(tray::create_tray(app.handle(), action_tx.clone()))
-                .expect("Failed to create tray");
+            let tray =
+                tauri::async_runtime::block_on(tray::create_tray(app.handle(), action_tx.clone()))
+                    .expect("Failed to create tray");
             #[cfg(not(target_os = "linux"))]
             let tray =
                 tray::create_tray(app.handle(), action_tx.clone()).expect("Failed to create tray");
@@ -339,7 +345,11 @@ pub fn run() {
                     }
                 };
 
-                log::info!("Setting state to: {:?}, login_state: {:?}", new_state, login_state);
+                log::info!(
+                    "Setting state to: {:?}, login_state: {:?}",
+                    new_state,
+                    login_state
+                );
 
                 // Update app state
                 app_state_for_autostart.set_sync_state(new_state).await;

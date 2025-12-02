@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::state::{AppState, StorageInfo, SyncState};
+use crate::state::{AppState, CurrentTransfer, StorageInfo, SyncState, TransferDirection};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -19,12 +19,19 @@ struct DeltasCountData {
 /// Nested data for transfer event
 #[derive(Debug, Deserialize)]
 struct TransferData {
-    /// The result type: "success", "error", etc.
+    /// The operation type: "upload", "download", "createRemoteDirectory", etc.
+    #[serde(rename = "of")]
+    operation: Option<String>,
+    /// The status: "queued", "started", "progress", "finished", "success", "error"
     #[serde(rename = "type")]
     transfer_type: Option<String>,
-    #[allow(dead_code)]
+    /// The relative path of the file
     #[serde(rename = "relativePath")]
     relative_path: Option<String>,
+    /// Bytes transferred so far (for progress events)
+    bytes: Option<u64>,
+    /// Total file size in bytes
+    size: Option<u64>,
 }
 
 /// CLI event types emitted in --verbose mode
@@ -113,13 +120,22 @@ fn find_filen_cli() -> FilenCliInfo {
     // Common installation paths to search (with their bin directories for PATH)
     let search_paths: Vec<(PathBuf, Option<PathBuf>)> = vec![
         // Standard system paths - node should be in system PATH
-        (PathBuf::from("/usr/local/bin/filen"), Some(PathBuf::from("/usr/local/bin"))),
-        (PathBuf::from("/opt/homebrew/bin/filen"), Some(PathBuf::from("/opt/homebrew/bin"))),
+        (
+            PathBuf::from("/usr/local/bin/filen"),
+            Some(PathBuf::from("/usr/local/bin")),
+        ),
+        (
+            PathBuf::from("/opt/homebrew/bin/filen"),
+            Some(PathBuf::from("/opt/homebrew/bin")),
+        ),
         // User local bin
         (home.join(".local/bin/filen"), Some(home.join(".local/bin"))),
         // npm global installs
         (home.join(".npm/bin/filen"), Some(home.join(".npm/bin"))),
-        (home.join(".npm-global/bin/filen"), Some(home.join(".npm-global/bin"))),
+        (
+            home.join(".npm-global/bin/filen"),
+            Some(home.join(".npm-global/bin")),
+        ),
     ];
 
     // Check standard paths first
@@ -244,7 +260,12 @@ fn build_path_env(bin_dir: &std::path::Path) -> String {
 
     // Try to find node in version managers
     if let Some(node_bin_dir) = find_node_bin_dir() {
-        return format!("{}:{}:{}", bin_dir.display(), node_bin_dir.display(), system_paths);
+        return format!(
+            "{}:{}:{}",
+            bin_dir.display(),
+            node_bin_dir.display(),
+            system_paths
+        );
     }
 
     format!("{}:{}", bin_dir.display(), system_paths)
@@ -287,11 +308,13 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             log::info!("Sync cycle completed");
             state.set_sync_state(SyncState::Synced).await;
             state.set_pending_count(0).await;
+            state.set_current_transfer(None).await;
         }
         CliEvent::CycleError { error } => {
             log::error!("Sync cycle error: {:?}", error);
             state.set_sync_state(SyncState::Error).await;
             state.set_pending_count(0).await;
+            state.set_current_transfer(None).await;
         }
         CliEvent::DeltasCount { data } => {
             state.set_pending_count(data.count).await;
@@ -301,15 +324,56 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             }
         }
         CliEvent::Transfer { data } => {
-            // Check if this transfer completed successfully
             if let Some(ref transfer_data) = data {
-                if transfer_data.transfer_type.as_deref() == Some("success") {
+                // Determine direction for all transfer types
+                let direction = match transfer_data.operation.as_deref() {
+                    Some("upload") | Some("uploadFile") => Some(TransferDirection::Upload),
+                    Some("download") | Some("downloadFile") => Some(TransferDirection::Download),
+                    _ => None, // createRemoteDirectory, etc. don't show indicator
+                };
+
+                // Check if this transfer completed successfully
+                if transfer_data.transfer_type.as_deref() == Some("success")
+                    || transfer_data.transfer_type.as_deref() == Some("finished")
+                {
                     let current = state.get_pending_count().await;
                     if current > 0 {
                         let new_count = current - 1;
                         log::debug!("Transfer complete, {} files remaining", new_count);
                         state.set_pending_count(new_count).await;
                     }
+                    // Clear current transfer when this file is done
+                    state.set_current_transfer(None).await;
+                } else if transfer_data.transfer_type.as_deref() == Some("started")
+                    || transfer_data.transfer_type.as_deref() == Some("progress")
+                    || transfer_data.transfer_type.as_deref() == Some("queued")
+                {
+                    // Update current transfer info (only for actual file transfers)
+                    if let (Some(dir), Some(path)) = (direction, &transfer_data.relative_path) {
+                        // Extract filename from path
+                        let filename = std::path::Path::new(path)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.clone());
+
+                        let size = transfer_data.size.unwrap_or(0);
+                        let bytes = transfer_data.bytes.unwrap_or(0);
+
+                        let mut transfer = CurrentTransfer::new(dir, filename, size);
+                        transfer.bytes = bytes;
+
+                        log::debug!(
+                            "Transfer progress: {:?} {}% ({}/{})",
+                            dir,
+                            transfer.progress_percent(),
+                            bytes,
+                            size
+                        );
+                        state.set_current_transfer(Some(transfer)).await;
+                    }
+                } else if transfer_data.transfer_type.as_deref() == Some("error") {
+                    // Clear current transfer on error
+                    state.set_current_transfer(None).await;
                 }
             }
             // Ensure we're in syncing state while transfers are happening
@@ -330,7 +394,10 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             let current = state.get_pending_count().await;
             if current > 0 {
                 let new_count = current - 1;
-                log::debug!("Transfer complete (standalone), {} files remaining", new_count);
+                log::debug!(
+                    "Transfer complete (standalone), {} files remaining",
+                    new_count
+                );
                 state.set_pending_count(new_count).await;
             }
         }
@@ -387,7 +454,7 @@ impl CliManager {
 
         let mut cmd = Command::new(&cli_info.command);
         cmd.arg("--version")
-            .stdin(Stdio::null())   // Prevent hanging on stdin when running from autostart
+            .stdin(Stdio::null()) // Prevent hanging on stdin when running from autostart
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
@@ -563,16 +630,11 @@ impl CliManager {
                     // Try to parse as JSON error event
                     if let Ok(err_event) = serde_json::from_str::<CliErrorEvent>(&line) {
                         if err_event.event_type.as_deref() == Some("error") {
-                            let msg = err_event
-                                .error
-                                .or(err_event.message)
-                                .unwrap_or_default();
+                            let msg = err_event.error.or(err_event.message).unwrap_or_default();
                             log::error!("CLI error: {}", msg);
                             state_for_stderr.set_sync_state(SyncState::Error).await;
                         }
-                    } else if line.to_lowercase().contains("error")
-                        || line.contains("failed")
-                    {
+                    } else if line.to_lowercase().contains("error") || line.contains("failed") {
                         // Fallback text detection for non-JSON errors
                         state_for_stderr.set_sync_state(SyncState::Error).await;
                     }

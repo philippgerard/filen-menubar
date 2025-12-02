@@ -1,7 +1,7 @@
 //! Linux tray implementation using ksni for native KDE/freedesktop StatusNotifierItem support
 
 use super::{TrayAction, TrayInterface};
-use crate::state::SyncState;
+use crate::state::{CurrentTransfer, SyncState};
 use ksni::{Tray, TrayMethods};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -13,6 +13,8 @@ struct LinuxTrayState {
     pending_count: u32,
     /// Login state: None = starting/unknown, Some(true) = logged in, Some(false) = not logged in
     login_state: Option<bool>,
+    /// Current transfer display text (None = hidden)
+    current_transfer_text: Option<String>,
     action_tx: mpsc::UnboundedSender<TrayAction>,
 }
 
@@ -66,6 +68,14 @@ impl TrayInterface for LinuxTray {
         }
         self.trigger_update();
     }
+
+    fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>) {
+        let new_text = transfer.map(|t| t.display_text(25));
+        if let Ok(mut s) = self.state.write() {
+            s.current_transfer_text = new_text;
+        }
+        self.trigger_update();
+    }
 }
 
 /// The ksni Tray implementation
@@ -106,6 +116,7 @@ impl Tray for FilenTray {
             .unwrap_or_else(|| "Unknown".to_string());
         let pending_count = state.as_ref().map(|s| s.pending_count).unwrap_or(0);
         let login_state = state.as_ref().and_then(|s| s.login_state);
+        let current_transfer_text = state.as_ref().and_then(|s| s.current_transfer_text.clone());
 
         // Pending count text (matches macOS behavior)
         let pending_text = if pending_count > 0 {
@@ -140,7 +151,23 @@ impl Tray for FilenTray {
                 ..Default::default()
             }
             .into(),
-            MenuItem::Separator,
+        ];
+
+        // Current transfer (only shown when there's an active transfer)
+        if let Some(transfer_text) = current_transfer_text {
+            items.push(
+                StandardItem {
+                    label: transfer_text,
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        items.push(MenuItem::Separator);
+
+        items.extend(vec![
             // Open Local Folder (enabled only when logged in)
             StandardItem {
                 label: rust_i18n::t!("menu.open_local_folder").to_string(),
@@ -165,7 +192,7 @@ impl Tray for FilenTray {
             }
             .into(),
             MenuItem::Separator,
-        ];
+        ]);
 
         // Login/Logout based on state (hidden when None/starting)
         match login_state {
@@ -249,6 +276,7 @@ pub async fn create_tray(
         status_text: rust_i18n::t!("status.starting").to_string(),
         pending_count: 0,
         login_state: None, // Starting state - unknown login status
+        current_transfer_text: None,
         action_tx,
     }));
 
