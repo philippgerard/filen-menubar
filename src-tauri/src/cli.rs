@@ -440,6 +440,11 @@ impl CliManager {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
 
+                // Buffer for accumulating multi-line JSON objects
+                // CLI outputs pretty-printed JSON spanning multiple lines
+                let mut json_buffer = String::new();
+                let mut brace_depth = 0;
+
                 loop {
                     // Check for shutdown signal (non-blocking)
                     if shutdown_rx.try_recv().is_ok() {
@@ -452,15 +457,43 @@ impl CliManager {
                         Ok(Ok(Some(line))) => {
                             log::debug!("CLI stdout: {}", line);
 
-                            // Try to parse as JSON event, fallback to text handling
-                            match serde_json::from_str::<CliEvent>(&line) {
-                                Ok(event) => {
-                                    handle_cli_event(&state, event).await;
+                            // Count braces to detect complete JSON objects
+                            for ch in line.chars() {
+                                match ch {
+                                    '{' => brace_depth += 1,
+                                    '}' => brace_depth -= 1,
+                                    _ => {}
                                 }
-                                Err(_) => {
-                                    // Fallback for non-JSON output (text mode)
-                                    handle_text_output(&state, &line).await;
+                            }
+
+                            // Accumulate lines into buffer
+                            json_buffer.push_str(&line);
+                            json_buffer.push('\n');
+
+                            // When brace depth returns to 0, we have a complete JSON object
+                            if brace_depth == 0 && !json_buffer.trim().is_empty() {
+                                let complete_json = json_buffer.trim();
+
+                                // Try to parse as JSON event
+                                if complete_json.starts_with('{') {
+                                    match serde_json::from_str::<CliEvent>(complete_json) {
+                                        Ok(event) => {
+                                            handle_cli_event(&state, event).await;
+                                        }
+                                        Err(e) => {
+                                            log::debug!(
+                                                "Failed to parse JSON event: {} - {}",
+                                                e,
+                                                &complete_json[..complete_json.len().min(100)]
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    // Non-JSON text output
+                                    handle_text_output(&state, complete_json).await;
                                 }
+
+                                json_buffer.clear();
                             }
                         }
                         Ok(Ok(None)) => {
