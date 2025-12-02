@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::state::{AppState, StorageInfo, SyncState};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -8,6 +9,66 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
+
+/// CLI event types emitted in --verbose mode
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum CliEvent {
+    #[serde(rename = "cycleStarted")]
+    CycleStarted,
+
+    #[serde(rename = "cycleProcessingTasksStarted")]
+    CycleProcessingTasksStarted,
+
+    #[serde(rename = "cycleSuccess")]
+    CycleSuccess,
+
+    #[serde(rename = "cycleError")]
+    CycleError { error: Option<String> },
+
+    #[serde(rename = "deltasCount")]
+    DeltasCount { count: u32 },
+
+    #[serde(rename = "transfer")]
+    Transfer {
+        #[allow(dead_code)]
+        path: Option<String>,
+    },
+
+    #[serde(rename = "success")]
+    Success {
+        #[allow(dead_code)]
+        path: Option<String>,
+    },
+
+    #[serde(rename = "uploadProgress")]
+    UploadProgress {
+        #[allow(dead_code)]
+        path: Option<String>,
+        #[allow(dead_code)]
+        progress: Option<f32>,
+    },
+
+    #[serde(rename = "downloadProgress")]
+    DownloadProgress {
+        #[allow(dead_code)]
+        path: Option<String>,
+        #[allow(dead_code)]
+        progress: Option<f32>,
+    },
+
+    #[serde(other)]
+    Unknown,
+}
+
+/// CLI error event structure for stderr parsing
+#[derive(Debug, Deserialize)]
+struct CliErrorEvent {
+    #[serde(rename = "type")]
+    event_type: Option<String>,
+    error: Option<String>,
+    message: Option<String>,
+}
 
 /// Information about the filen CLI location
 struct FilenCliInfo {
@@ -193,6 +254,73 @@ pub enum CliMessage {
     Error(String),
 }
 
+/// Handle a parsed CLI event and update app state accordingly
+async fn handle_cli_event(state: &AppState, event: CliEvent) {
+    match event {
+        CliEvent::CycleStarted => {
+            // Don't set syncing on cycleStarted - cycles run frequently even when idle
+        }
+        CliEvent::CycleProcessingTasksStarted => {
+            if state.get_sync_state().await != SyncState::Syncing {
+                log::info!("Processing tasks started");
+                state.set_sync_state(SyncState::Syncing).await;
+            }
+        }
+        CliEvent::CycleSuccess => {
+            log::info!("Sync cycle completed");
+            state.set_sync_state(SyncState::Synced).await;
+            state.set_pending_count(0).await;
+        }
+        CliEvent::CycleError { error } => {
+            log::error!("Sync cycle error: {:?}", error);
+            state.set_sync_state(SyncState::Error).await;
+            state.set_pending_count(0).await;
+        }
+        CliEvent::DeltasCount { count } => {
+            state.set_pending_count(count).await;
+            if count > 0 {
+                log::info!("Syncing {} files", count);
+                state.set_sync_state(SyncState::Syncing).await;
+            }
+        }
+        CliEvent::Transfer { .. }
+        | CliEvent::UploadProgress { .. }
+        | CliEvent::DownloadProgress { .. } => {
+            if state.get_sync_state().await != SyncState::Syncing {
+                log::info!("File transfer in progress");
+                state.set_sync_state(SyncState::Syncing).await;
+            }
+        }
+        CliEvent::Success { .. } => {
+            let current = state.get_pending_count().await;
+            if current > 0 {
+                let new_count = current - 1;
+                log::info!("Transfer complete, {} files remaining", new_count);
+                state.set_pending_count(new_count).await;
+            }
+        }
+        CliEvent::Unknown => {
+            // Ignore unknown event types
+        }
+    }
+}
+
+/// Handle non-JSON text output from CLI (fallback for text mode)
+async fn handle_text_output(state: &AppState, line: &str) {
+    if line.starts_with("Done syncing") {
+        if state.get_sync_state().await != SyncState::Synced {
+            log::info!("Sync completed (text)");
+            state.set_sync_state(SyncState::Synced).await;
+            state.set_pending_count(0).await;
+        }
+    } else if line.starts_with("Syncing ")
+        && !line.contains('{')
+        && state.get_sync_state().await != SyncState::Syncing
+    {
+        state.set_sync_state(SyncState::Syncing).await;
+    }
+}
+
 /// Manages the Filen CLI process
 pub struct CliManager {
     process: Arc<RwLock<Option<Child>>>,
@@ -324,78 +452,15 @@ impl CliManager {
                         Ok(Ok(Some(line))) => {
                             log::debug!("CLI stdout: {}", line);
 
-                            // Parse CLI output to determine state
-                            // With --verbose, CLI outputs JSON events with "type" field
-                            // Note: We don't set Syncing on cycleStarted because cycles run
-                            // frequently even when idle. We only show Syncing when there's
-                            // actual work (deltasCount > 0 or file transfers).
-                            if line.contains("\"type\": \"cycleProcessingTasksStarted\"") {
-                                // Tasks are about to be processed - set syncing early
-                                if state.get_sync_state().await != SyncState::Syncing {
-                                    log::info!("Processing tasks started");
-                                    state.set_sync_state(SyncState::Syncing).await;
+                            // Try to parse as JSON event, fallback to text handling
+                            match serde_json::from_str::<CliEvent>(&line) {
+                                Ok(event) => {
+                                    handle_cli_event(&state, event).await;
                                 }
-                            } else if line.contains("\"type\": \"cycleSuccess\"") {
-                                // Sync cycle completed successfully
-                                log::info!("Sync cycle completed");
-                                state.set_sync_state(SyncState::Synced).await;
-                                // Clear current file when sync completes
-                                state.set_pending_count(0).await;
-                            } else if line.contains("\"type\": \"cycleError\"") {
-                                // Sync cycle had an error
-                                log::error!("Sync cycle error");
-                                state.set_sync_state(SyncState::Error).await;
-                                state.set_pending_count(0).await;
-                            } else if line.contains("\"count\":") {
-                                // Parse pending count from deltasCount event
-                                // The line looks like: "count": 5
-                                let count_str: String = line
-                                    .chars()
-                                    .skip_while(|c| !c.is_ascii_digit())
-                                    .take_while(|c| c.is_ascii_digit())
-                                    .collect();
-                                if let Ok(count) = count_str.parse::<u32>() {
-                                    state.set_pending_count(count).await;
-                                    if count > 0 {
-                                        log::info!("Syncing {} files", count);
-                                        state.set_sync_state(SyncState::Syncing).await;
-                                    }
+                                Err(_) => {
+                                    // Fallback for non-JSON output (text mode)
+                                    handle_text_output(&state, &line).await;
                                 }
-                            } else if line.contains("\"type\": \"transfer\"") {
-                                // A transfer event - ensure we show Syncing
-                                if state.get_sync_state().await != SyncState::Syncing {
-                                    log::info!("File transfer in progress");
-                                    state.set_sync_state(SyncState::Syncing).await;
-                                }
-                            } else if line.contains("\"type\": \"success\"") {
-                                // A file transfer completed successfully - decrement pending count
-                                let current = state.get_pending_count().await;
-                                if current > 0 {
-                                    let new_count = current - 1;
-                                    log::info!("Transfer complete, {} files remaining", new_count);
-                                    state.set_pending_count(new_count).await;
-                                }
-                            } else if line.contains("\"type\": \"uploadProgress\"")
-                                || line.contains("\"type\": \"downloadProgress\"")
-                            {
-                                // Active file transfer - ensure we show Syncing
-                                if state.get_sync_state().await != SyncState::Syncing {
-                                    log::info!("File transfer in progress");
-                                    state.set_sync_state(SyncState::Syncing).await;
-                                }
-                            }
-                            // Fallback for non-verbose mode or text output
-                            else if line.starts_with("Done syncing") {
-                                if state.get_sync_state().await != SyncState::Synced {
-                                    log::info!("Sync completed (text)");
-                                    state.set_sync_state(SyncState::Synced).await;
-                                    state.set_pending_count(0).await;
-                                }
-                            } else if line.starts_with("Syncing ")
-                                && !line.contains("{")
-                                && state.get_sync_state().await != SyncState::Syncing
-                            {
-                                state.set_sync_state(SyncState::Syncing).await;
                             }
                         }
                         Ok(Ok(None)) => {
@@ -426,8 +491,21 @@ impl CliManager {
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     log::warn!("CLI stderr: {}", line);
-                    // Check for error patterns
-                    if line.contains("error") || line.contains("Error") || line.contains("failed") {
+
+                    // Try to parse as JSON error event
+                    if let Ok(err_event) = serde_json::from_str::<CliErrorEvent>(&line) {
+                        if err_event.event_type.as_deref() == Some("error") {
+                            let msg = err_event
+                                .error
+                                .or(err_event.message)
+                                .unwrap_or_default();
+                            log::error!("CLI error: {}", msg);
+                            state_for_stderr.set_sync_state(SyncState::Error).await;
+                        }
+                    } else if line.to_lowercase().contains("error")
+                        || line.contains("failed")
+                    {
+                        // Fallback text detection for non-JSON errors
                         state_for_stderr.set_sync_state(SyncState::Error).await;
                     }
                 }
