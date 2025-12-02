@@ -12,6 +12,7 @@ menu:
   logout: "Abmelden"
   settings: "Einstellungen..."
   show_logs: "Protokolle anzeigen..."
+  about: "Über Filen Menubar"
   quit: "Beenden"
 
 # Sync states

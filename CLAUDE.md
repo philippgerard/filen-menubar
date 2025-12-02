@@ -67,6 +67,15 @@ The Linux tray uses the `ksni` crate for D-Bus StatusNotifierItem support. Impor
 - **State is stored externally**: The `FilenTray` struct holds an `Arc<RwLock<LinuxTrayState>>` that's shared with `LinuxTray`. The `Tray::menu()` method reads from this shared state to build the menu.
 - **Empty closure is intentional**: `handle.update(|_| {}).await` uses an empty closure because we update the shared state before calling update. The closure receives `&mut FilenTray`, but our state is in the external `Arc<RwLock>`.
 
+## Versioning
+
+Keep versions in sync across all three files:
+- `package.json` - npm version
+- `src-tauri/tauri.conf.json` - Tauri app version
+- `src-tauri/Cargo.toml` - Rust crate version
+
+The version is displayed in the About dialog via `env!("CARGO_PKG_VERSION")`.
+
 ## Configuration
 
 Config stored at:

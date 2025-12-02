@@ -150,6 +150,7 @@ impl Tray for FilenTray {
         let state_clone5 = self.state.clone();
         let state_clone6 = self.state.clone();
         let state_clone7 = self.state.clone();
+        let state_clone8 = self.state.clone();
 
         let mut items = vec![
             // Status (disabled, just for display)
@@ -270,6 +271,20 @@ impl Tray for FilenTray {
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone6.read() {
                         let _ = s.action_tx.send(TrayAction::ShowLogs);
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        // About
+        items.push(
+            StandardItem {
+                label: rust_i18n::t!("menu.about").to_string(),
+                activate: Box::new(move |_| {
+                    if let Ok(s) = state_clone8.read() {
+                        let _ = s.action_tx.send(TrayAction::About);
                     }
                 }),
                 ..Default::default()

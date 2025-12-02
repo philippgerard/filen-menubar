@@ -12,6 +12,7 @@ menu:
   logout: "Logout"
   settings: "Settings..."
   show_logs: "Show Logs..."
+  about: "About Filen Menubar"
   quit: "Quit"
 
 # Sync states

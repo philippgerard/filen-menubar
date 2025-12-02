@@ -364,6 +364,10 @@ fn build_menu(
         MenuItemBuilder::with_id("show_logs", rust_i18n::t!("menu.show_logs")).build(app)?;
     builder = builder.item(&show_logs_item);
 
+    // About
+    let about_item = MenuItemBuilder::with_id("about", rust_i18n::t!("menu.about")).build(app)?;
+    builder = builder.item(&about_item);
+
     builder = builder.separator();
 
     // Quit
@@ -432,6 +436,7 @@ pub fn create_tray(
             "logout" => Some(TrayAction::Logout),
             "settings" => Some(TrayAction::Settings),
             "show_logs" => Some(TrayAction::ShowLogs),
+            "about" => Some(TrayAction::About),
             "quit" => Some(TrayAction::Quit),
             _ => None,
         };

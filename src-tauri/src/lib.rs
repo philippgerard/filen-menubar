@@ -163,6 +163,26 @@ async fn handle_tray_action(
                 log::error!("Failed to open log directory: {}", e);
             }
         }
+        TrayAction::About => {
+            log::info!("About requested");
+            // Show native About dialog
+            let version = env!("CARGO_PKG_VERSION");
+            let about_text = format!(
+                "Version {}\n\n\
+                A lightweight menubar app for Filen cloud sync.\n\n\
+                Author: Philipp Gerard\n\
+                License: MIT\n\n\
+                https://github.com/philippgerard/filen-menubar",
+                version
+            );
+
+            app_handle
+                .dialog()
+                .message(about_text)
+                .title("Filen Menubar")
+                .kind(MessageDialogKind::Info)
+                .blocking_show();
+        }
         TrayAction::Quit => {
             log::info!("Quit requested");
             cli_manager.stop_sync().await;
