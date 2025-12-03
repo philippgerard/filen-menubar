@@ -159,6 +159,10 @@ async fn handle_tray_action(
         TrayAction::ShowLogs => {
             log::info!("Show logs requested");
             let log_dir = logging::get_log_dir();
+            // Create the directory if it doesn't exist
+            if let Err(e) = std::fs::create_dir_all(&log_dir) {
+                log::error!("Failed to create log directory: {}", e);
+            }
             if let Err(e) = open::that(&log_dir) {
                 log::error!("Failed to open log directory: {}", e);
             }
