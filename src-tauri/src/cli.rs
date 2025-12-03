@@ -458,8 +458,8 @@ impl CliManager {
         }
     }
 
-    /// Check if filen CLI is installed
-    pub async fn is_cli_available() -> bool {
+    /// Check if filen CLI is installed (single attempt)
+    async fn check_cli_once() -> bool {
         // Run filesystem search in blocking context to avoid blocking async runtime
         let cli_info = match tokio::task::spawn_blocking(find_filen_cli).await {
             Ok(info) => info,
@@ -499,6 +499,41 @@ impl CliManager {
                 false
             }
         }
+    }
+
+    /// Check if filen CLI is installed, with retries for macOS Login Item boot timing.
+    ///
+    /// When launched as a Login Item at macOS boot, the app may start before the
+    /// filesystem (especially version manager directories like fnm/nvm) is fully ready.
+    /// This function retries with exponential backoff to handle this race condition.
+    pub async fn is_cli_available() -> bool {
+        // Retry delays: 0s (immediate), 2s, 4s, 8s
+        let retry_delays = [0, 2, 4, 8];
+
+        for (attempt, delay_secs) in retry_delays.iter().enumerate() {
+            if *delay_secs > 0 {
+                log::info!(
+                    "CLI not found, retrying in {}s (attempt {}/{})",
+                    delay_secs,
+                    attempt + 1,
+                    retry_delays.len()
+                );
+                tokio::time::sleep(Duration::from_secs(*delay_secs)).await;
+            }
+
+            if Self::check_cli_once().await {
+                if attempt > 0 {
+                    log::info!("CLI found after {} retries", attempt);
+                }
+                return true;
+            }
+        }
+
+        log::error!(
+            "Filen CLI not found after {} attempts. Please install it with: npm install -g @filen/cli",
+            retry_delays.len()
+        );
+        false
     }
 
     /// Start the sync process (uses CLI's stored session)

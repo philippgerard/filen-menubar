@@ -344,7 +344,8 @@ pub fn run() {
                 log::info!("Starting initialization check...");
 
                 // Wrap entire initialization in a timeout to prevent hanging forever
-                let init_result = timeout(Duration::from_secs(15), async {
+                // Note: CLI retry logic can take up to 14s (0+2+4+8), so allow extra buffer
+                let init_result = timeout(Duration::from_secs(30), async {
                     // Check if CLI is available
                     log::info!("Checking CLI availability...");
                     let cli_available = CliManager::is_cli_available().await;
