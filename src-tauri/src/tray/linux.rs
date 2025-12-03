@@ -48,10 +48,19 @@ impl TrayInterface for LinuxTray {
     }
 
     fn update_status(&self, text: &str) {
-        if let Ok(mut s) = self.state.write() {
-            s.status_text = text.to_string();
+        let changed = if let Ok(mut s) = self.state.write() {
+            if s.status_text != text {
+                s.status_text = text.to_string();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if changed {
+            self.trigger_update();
         }
-        self.trigger_update();
     }
 
     fn update_storage(&self, _text: &str) {
@@ -66,18 +75,36 @@ impl TrayInterface for LinuxTray {
     }
 
     fn update_pending_count(&self, count: u32) {
-        if let Ok(mut s) = self.state.write() {
-            s.pending_count = count;
+        let changed = if let Ok(mut s) = self.state.write() {
+            if s.pending_count != count {
+                s.pending_count = count;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if changed {
+            self.trigger_update();
         }
-        self.trigger_update();
     }
 
     fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>) {
         let new_text = transfer.map(|t| t.display_text(25));
-        if let Ok(mut s) = self.state.write() {
-            s.current_transfer_text = new_text;
+        let changed = if let Ok(mut s) = self.state.write() {
+            if s.current_transfer_text != new_text {
+                s.current_transfer_text = new_text;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if changed {
+            self.trigger_update();
         }
-        self.trigger_update();
     }
 }
 
