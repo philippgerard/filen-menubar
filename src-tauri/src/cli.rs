@@ -541,15 +541,24 @@ impl CliManager {
         // Stop any existing process
         self.stop_sync().await;
 
-        // Build the sync command
-        let sync_pair = format!(
-            "{}:{}:{}",
-            config.local_path.display(),
-            config.sync_mode,
-            config.remote_path
-        );
+        // Generate syncPairs.json with ignore patterns
+        let sync_pairs_path = config.write_sync_pairs().map_err(|e| {
+            log::error!("Failed to write sync pairs: {}", e);
+            CliError::Spawn(std::io::Error::other(format!(
+                "Failed to write sync pairs: {}",
+                e
+            )))
+        })?;
 
-        log::info!("Starting sync with pair: {}", sync_pair);
+        log::info!("Generated syncPairs.json at: {:?}", sync_pairs_path);
+        log::info!(
+            "Sync config: local={}, remote={}, mode={}, ignore={:?}, excludeDotFiles={}",
+            config.local_path.display(),
+            config.remote_path,
+            config.sync_mode,
+            config.ignore,
+            config.exclude_dot_files
+        );
 
         // Don't pass credentials - CLI will use its stored session
         // Use --verbose to get detailed file sync information
@@ -562,7 +571,7 @@ impl CliManager {
         let mut cmd = Command::new(&cli_info.command);
         cmd.arg("--verbose")
             .arg("sync")
-            .arg(&sync_pair)
+            .arg(&sync_pairs_path)
             .arg("--continuous")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -733,19 +742,21 @@ impl CliManager {
     /// Trigger a manual sync (one-shot, uses CLI's stored session)
     #[allow(dead_code)]
     pub async fn sync_once(&self, config: &Config) -> Result<(), CliError> {
-        let sync_pair = format!(
-            "{}:{}:{}",
-            config.local_path.display(),
-            config.sync_mode,
-            config.remote_path
-        );
+        // Generate syncPairs.json with ignore patterns
+        let sync_pairs_path = config.write_sync_pairs().map_err(|e| {
+            log::error!("Failed to write sync pairs: {}", e);
+            CliError::Spawn(std::io::Error::other(format!(
+                "Failed to write sync pairs: {}",
+                e
+            )))
+        })?;
 
-        log::info!("Running one-shot sync: {}", sync_pair);
+        log::info!("Running one-shot sync with config: {:?}", sync_pairs_path);
         self.state.set_sync_state(SyncState::Syncing).await;
 
         let cli_info = find_filen_cli();
         let mut cmd = Command::new(&cli_info.command);
-        cmd.arg("sync").arg(&sync_pair);
+        cmd.arg("sync").arg(&sync_pairs_path);
 
         // Set PATH if we found a specific installation (needed for node-based CLI)
         if let Some(ref path_env) = cli_info.path_env {
