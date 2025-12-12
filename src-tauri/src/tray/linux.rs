@@ -123,7 +123,8 @@ impl Tray for FilenTray {
             | SyncState::Scanning
             | SyncState::Synced
             | SyncState::NotLoggedIn
-            | SyncState::Paused => "folder-sync".to_string(),
+            | SyncState::Paused
+            | SyncState::Offline => "folder-sync".to_string(),
             SyncState::Syncing => "folder-sync".to_string(),
             SyncState::Error | SyncState::CliNotFound => "dialog-error".to_string(),
         }
@@ -152,9 +153,11 @@ impl Tray for FilenTray {
         let current_transfer_text = state.as_ref().and_then(|s| s.current_transfer_text.clone());
 
         // Pending count text (matches macOS behavior)
-        // During Scanning/Starting, show animated dots
-        let pending_text = if sync_state == SyncState::Scanning || sync_state == SyncState::Starting
-        {
+        // For Offline state, show "No internet connection"
+        let pending_text = if sync_state == SyncState::Offline {
+            rust_i18n::t!("menu.no_internet").to_string()
+        } else if sync_state == SyncState::Scanning || sync_state == SyncState::Starting {
+            // During Scanning/Starting, show animated dots
             match animation_frame % 3 {
                 0 => ".".to_string(),
                 1 => "..".to_string(),

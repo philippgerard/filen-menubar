@@ -22,6 +22,8 @@ pub enum SyncState {
     Error,
     /// Filen CLI not found/not installed
     CliNotFound,
+    /// No internet connection
+    Offline,
 }
 
 impl SyncState {
@@ -36,6 +38,7 @@ impl SyncState {
             SyncState::Paused => rust_i18n::t!("status.paused").to_string(),
             SyncState::Error => rust_i18n::t!("status.error").to_string(),
             SyncState::CliNotFound => rust_i18n::t!("status.cli_not_found").to_string(),
+            SyncState::Offline => rust_i18n::t!("status.offline").to_string(),
         }
     }
 
@@ -51,6 +54,7 @@ impl SyncState {
             SyncState::Paused => "idle",
             SyncState::Error => "error",
             SyncState::CliNotFound => "error",
+            SyncState::Offline => "idle",
         }
     }
 }
@@ -323,6 +327,7 @@ mod tests {
             SyncState::Paused,
             SyncState::Error,
             SyncState::CliNotFound,
+            SyncState::Offline,
         ];
 
         for state in states {
@@ -342,6 +347,7 @@ mod tests {
             SyncState::NotLoggedIn,
             SyncState::Synced,
             SyncState::Paused,
+            SyncState::Offline,
         ];
         for state in idle_states {
             assert_eq!(

@@ -4,6 +4,7 @@ _version: 1
 menu:
   status: "Status: %{status}"
   up_to_date: "All files synced"
+  no_internet: "No internet connection"
   files_remaining: "%{count} files remaining..."
   file_remaining: "1 file remaining..."
   open_local_folder: "Open Local Folder"
@@ -25,6 +26,7 @@ status:
   paused: "Paused"
   error: "Sync Error"
   cli_not_found: "CLI Not Found"
+  offline: "Offline"
 
 # Tooltips
 tooltip:

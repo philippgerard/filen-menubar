@@ -298,6 +298,30 @@ pub enum CliMessage {
     Error(String),
 }
 
+/// Check if an error message indicates a network connectivity issue
+fn is_network_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("enotfound")
+        || lower.contains("econnrefused")
+        || lower.contains("econnreset")
+        || lower.contains("etimedout")
+        || lower.contains("ehostunreach")
+        || lower.contains("enetunreach")
+        || lower.contains("network")
+        || lower.contains("offline")
+        || lower.contains("internet")
+        || lower.contains("dns")
+        || lower.contains("socket hang up")
+        || lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("connect etimedout")
+        || lower.contains("websocket")
+        || lower.contains("socket.filen.io")
+        || lower.contains("err_unhandled_error")
+        || lower.contains("fetch failed")
+        || lower.contains("getaddrinfo")
+}
+
 /// Handle a parsed CLI event and update app state accordingly
 async fn handle_cli_event(state: &AppState, event: CliEvent) {
     match event {
@@ -329,8 +353,14 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             state.set_current_transfer(None).await;
         }
         CliEvent::CycleError { error } => {
-            log::error!("Sync cycle error: {:?}", error);
-            state.set_sync_state(SyncState::Error).await;
+            let error_msg = error.as_deref().unwrap_or("");
+            if is_network_error(error_msg) {
+                log::warn!("Network error detected: {:?}", error);
+                state.set_sync_state(SyncState::Offline).await;
+            } else {
+                log::error!("Sync cycle error: {:?}", error);
+                state.set_sync_state(SyncState::Error).await;
+            }
             state.set_pending_count(0).await;
             state.set_current_transfer(None).await;
         }
@@ -664,12 +694,26 @@ impl CliManager {
                         Ok(Ok(None)) => {
                             // EOF - process exited
                             log::warn!("CLI process stdout closed");
-                            state.set_sync_state(SyncState::Error).await;
+                            // Give stderr handler time to process network errors
+                            // (stderr and stdout handlers run concurrently)
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            // Preserve Offline state if already set by stderr handler
+                            // (network errors often cause CLI to crash)
+                            let current_state = state.get_sync_state().await;
+                            if current_state != SyncState::Offline {
+                                state.set_sync_state(SyncState::Error).await;
+                            }
                             break;
                         }
                         Ok(Err(e)) => {
                             log::error!("Error reading CLI stdout: {}", e);
-                            state.set_sync_state(SyncState::Error).await;
+                            // Give stderr handler time to process network errors
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            // Preserve Offline state if already set by stderr handler
+                            let current_state = state.get_sync_state().await;
+                            if current_state != SyncState::Offline {
+                                state.set_sync_state(SyncState::Error).await;
+                            }
                             break;
                         }
                         Err(_) => {
@@ -686,6 +730,9 @@ impl CliManager {
             tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
+                // Track if we've detected a network error in this stderr stream
+                // Once detected, we shouldn't downgrade to Error
+                let mut network_error_detected = false;
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     log::warn!("CLI stderr: {}", line);
@@ -694,11 +741,25 @@ impl CliManager {
                     if let Ok(err_event) = serde_json::from_str::<CliErrorEvent>(&line) {
                         if err_event.event_type.as_deref() == Some("error") {
                             let msg = err_event.error.or(err_event.message).unwrap_or_default();
-                            log::error!("CLI error: {}", msg);
-                            state_for_stderr.set_sync_state(SyncState::Error).await;
+                            if is_network_error(&msg) {
+                                log::warn!("Network error from stderr: {}", msg);
+                                state_for_stderr.set_sync_state(SyncState::Offline).await;
+                                network_error_detected = true;
+                            } else if !network_error_detected {
+                                log::error!("CLI error: {}", msg);
+                                state_for_stderr.set_sync_state(SyncState::Error).await;
+                            }
                         }
-                    } else if line.to_lowercase().contains("error") || line.contains("failed") {
+                    } else if is_network_error(&line) {
+                        // Text-based network error detection
+                        log::warn!("Network error detected in stderr: {}", line);
+                        state_for_stderr.set_sync_state(SyncState::Offline).await;
+                        network_error_detected = true;
+                    } else if !network_error_detected
+                        && (line.to_lowercase().contains("error") || line.contains("failed"))
+                    {
                         // Fallback text detection for non-JSON errors
+                        // Only set Error if we haven't detected a network error
                         state_for_stderr.set_sync_state(SyncState::Error).await;
                     }
                 }
@@ -1106,5 +1167,57 @@ mod tests {
             }
             _ => panic!("Expected Transfer"),
         }
+    }
+
+    // ==================== Network error detection tests ====================
+
+    #[test]
+    fn test_is_network_error_enotfound() {
+        assert!(super::is_network_error(
+            "getaddrinfo ENOTFOUND api.filen.io"
+        ));
+        assert!(super::is_network_error("Error: ENOTFOUND"));
+    }
+
+    #[test]
+    fn test_is_network_error_connection_errors() {
+        assert!(super::is_network_error(
+            "connect ECONNREFUSED 127.0.0.1:443"
+        ));
+        assert!(super::is_network_error("read ECONNRESET"));
+        assert!(super::is_network_error("connect ETIMEDOUT 1.2.3.4:443"));
+    }
+
+    #[test]
+    fn test_is_network_error_host_unreachable() {
+        assert!(super::is_network_error("connect EHOSTUNREACH"));
+        assert!(super::is_network_error("connect ENETUNREACH"));
+    }
+
+    #[test]
+    fn test_is_network_error_text_patterns() {
+        assert!(super::is_network_error("Network error occurred"));
+        assert!(super::is_network_error("Device is offline"));
+        assert!(super::is_network_error("No internet connection"));
+        assert!(super::is_network_error("DNS lookup failed"));
+        assert!(super::is_network_error("socket hang up"));
+        assert!(super::is_network_error("connection refused"));
+        assert!(super::is_network_error("connection reset by peer"));
+    }
+
+    #[test]
+    fn test_is_network_error_case_insensitive() {
+        assert!(super::is_network_error("NETWORK ERROR"));
+        assert!(super::is_network_error("Offline Mode"));
+        assert!(super::is_network_error("NO INTERNET"));
+    }
+
+    #[test]
+    fn test_is_network_error_false_positives() {
+        // These should NOT be detected as network errors
+        assert!(!super::is_network_error("File not found"));
+        assert!(!super::is_network_error("Permission denied"));
+        assert!(!super::is_network_error("Invalid JSON"));
+        assert!(!super::is_network_error("Authentication failed"));
     }
 }

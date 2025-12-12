@@ -32,7 +32,9 @@ fn decode_png(png_data: &[u8]) -> Option<Image<'static>> {
 /// Get the appropriate icon for the given sync state and animation frame
 fn get_icon_for_state(state: SyncState, animation_frame: u8) -> Option<Image<'static>> {
     let png_data = match state {
-        SyncState::Synced | SyncState::Paused | SyncState::NotLoggedIn => ICON_IDLE,
+        SyncState::Synced | SyncState::Paused | SyncState::NotLoggedIn | SyncState::Offline => {
+            ICON_IDLE
+        }
         SyncState::Error | SyncState::CliNotFound => ICON_ERROR,
         SyncState::Starting | SyncState::Scanning | SyncState::Syncing => {
             // Cycle through 4 frames for pulsing animation
@@ -267,6 +269,11 @@ fn get_animated_dots(animation_frame: u8) -> &'static str {
 
 /// Get the pending count text based on sync state and count
 fn get_pending_text(sync_state: SyncState, pending_count: u32, animation_frame: u8) -> String {
+    // For Offline state, show "No internet connection"
+    if sync_state == SyncState::Offline {
+        return rust_i18n::t!("menu.no_internet").to_string();
+    }
+
     // During Scanning/Starting, we don't know the pending count yet - show animated dots
     if sync_state == SyncState::Scanning || sync_state == SyncState::Starting {
         return get_animated_dots(animation_frame).to_string();

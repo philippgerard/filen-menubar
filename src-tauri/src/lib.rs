@@ -199,12 +199,14 @@ async fn handle_tray_action(
 async fn status_update_loop(
     app_state: AppState,
     tray: Arc<dyn TrayInterface>,
-    _cli_manager: Arc<CliManager>,
+    cli_manager: Arc<CliManager>,
+    config: Config,
 ) {
     log::info!("Status update loop started");
     // Use shorter interval (500ms) for smoother progress updates during transfers
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
     let mut tick_count = 0u32;
+    let mut offline_retry_counter = 0u32;
 
     loop {
         interval.tick().await;
@@ -215,6 +217,24 @@ async fn status_update_loop(
         // Log first few ticks and whenever state changes
         if tick_count <= 3 {
             log::debug!("Status loop tick {}: state={:?}", tick_count, sync_state);
+        }
+
+        // Auto-retry when offline: attempt to reconnect every ~30 seconds
+        // (60 ticks at 500ms intervals = 30 seconds)
+        if sync_state == SyncState::Offline {
+            offline_retry_counter += 1;
+            if offline_retry_counter >= 60 {
+                offline_retry_counter = 0;
+                log::info!("Attempting to reconnect after offline state...");
+                // Set to scanning state before retrying
+                app_state.set_sync_state(SyncState::Scanning).await;
+                if let Err(e) = cli_manager.start_sync(&config).await {
+                    log::debug!("Reconnect attempt failed: {}", e);
+                    // start_sync failure will set the state back to Error/Offline via CLI events
+                }
+            }
+        } else {
+            offline_retry_counter = 0;
         }
 
         tray.update_status(&sync_state.status_text());
@@ -322,12 +342,14 @@ pub fn run() {
             let tray_for_status = tray.clone();
             let app_state_for_status = app_state.clone();
             let cli_manager_for_status = cli_manager.clone();
+            let config_for_status = config.clone();
 
             tauri::async_runtime::spawn(async move {
                 status_update_loop(
                     app_state_for_status,
                     tray_for_status,
                     cli_manager_for_status,
+                    config_for_status,
                 )
                 .await;
             });
