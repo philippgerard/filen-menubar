@@ -134,6 +134,11 @@ fn find_filen_cli() -> FilenCliInfo {
             PathBuf::from("/opt/homebrew/bin/filen"),
             Some(PathBuf::from("/opt/homebrew/bin")),
         ),
+        // Official Filen CLI installer path (curl -sL https://filen.io/cli.sh | bash)
+        (
+            home.join(".filen-cli/bin/filen"),
+            Some(home.join(".filen-cli/bin")),
+        ),
         // User local bin
         (home.join(".local/bin/filen"), Some(home.join(".local/bin"))),
         // npm global installs
