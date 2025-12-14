@@ -22,6 +22,9 @@ RUST_LOG=debug npm run tauri dev
 # Production build
 npm run tauri build
 
+# Production build with signing and notarization (macOS)
+source .env && APPLE_SIGNING_IDENTITY="Developer ID Application: Philipp Gérard (7WS855G6D3)" npm run tauri build
+
 # Rust linting
 cargo clippy --manifest-path src-tauri/Cargo.toml
 
@@ -75,6 +78,24 @@ Keep versions in sync across all three files:
 - `src-tauri/Cargo.toml` - Rust crate version
 
 The version is displayed in the About dialog via `env!("CARGO_PKG_VERSION")`.
+
+## macOS Notarization
+
+To build a signed and notarized release, the following environment variables are required:
+
+- `APPLE_SIGNING_IDENTITY` - The signing certificate name (set inline in the build command)
+- `APPLE_ID` - Apple Developer account email
+- `APPLE_PASSWORD` - App-specific password (generate at appleid.apple.com)
+- `APPLE_TEAM_ID` - Apple Developer Team ID
+
+The credentials (except signing identity) are stored in `.env` in the project root. This file is gitignored.
+
+Example `.env`:
+```
+APPLE_ID=your@email.com
+APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx
+APPLE_TEAM_ID=XXXXXXXXXX
+```
 
 ## Configuration
 
