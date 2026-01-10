@@ -1,6 +1,6 @@
 //! Linux tray implementation using ksni for native KDE/freedesktop StatusNotifierItem support
 
-use super::{TrayAction, TrayInterface};
+use super::{get_pending_text, TrayAction, TrayInterface};
 use crate::state::{CurrentTransfer, SyncState};
 use ksni::{Tray, TrayMethods};
 use std::sync::{Arc, RwLock};
@@ -152,26 +152,8 @@ impl Tray for FilenTray {
         let login_state = state.as_ref().and_then(|s| s.login_state);
         let current_transfer_text = state.as_ref().and_then(|s| s.current_transfer_text.clone());
 
-        // Pending count text (matches macOS behavior)
-        // For Offline state, show "No internet connection"
-        let pending_text = if sync_state == SyncState::Offline {
-            rust_i18n::t!("menu.no_internet").to_string()
-        } else if sync_state == SyncState::Scanning || sync_state == SyncState::Starting {
-            // During Scanning/Starting, show animated dots
-            match animation_frame % 3 {
-                0 => ".".to_string(),
-                1 => "..".to_string(),
-                _ => "...".to_string(),
-            }
-        } else if pending_count > 0 {
-            if pending_count == 1 {
-                rust_i18n::t!("menu.file_remaining").to_string()
-            } else {
-                rust_i18n::t!("menu.files_remaining", count = pending_count).to_string()
-            }
-        } else {
-            rust_i18n::t!("menu.up_to_date").to_string()
-        };
+        // Get pending count text using shared helper function
+        let pending_text = get_pending_text(sync_state, pending_count, animation_frame);
 
         let state_clone = self.state.clone();
         let state_clone2 = self.state.clone();

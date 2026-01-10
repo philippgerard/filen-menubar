@@ -1,6 +1,6 @@
 //! macOS tray implementation using Tauri's TrayIcon
 
-use super::{TrayAction, TrayInterface};
+use super::{get_pending_text, TrayAction, TrayInterface};
 use crate::state::{CurrentTransfer, SyncState};
 use std::sync::{Arc, RwLock};
 use tauri::{
@@ -255,38 +255,6 @@ impl TrayInterface for MacOsTray {
             let items = self.menu_items.read().unwrap();
             let _ = items.transfer_item.set_text(&text);
         }
-    }
-}
-
-/// Get the animated dots for loading states
-fn get_animated_dots(animation_frame: u8) -> &'static str {
-    match animation_frame % 3 {
-        0 => ".",
-        1 => "..",
-        _ => "...",
-    }
-}
-
-/// Get the pending count text based on sync state and count
-fn get_pending_text(sync_state: SyncState, pending_count: u32, animation_frame: u8) -> String {
-    // For Offline state, show "No internet connection"
-    if sync_state == SyncState::Offline {
-        return rust_i18n::t!("menu.no_internet").to_string();
-    }
-
-    // During Scanning/Starting, we don't know the pending count yet - show animated dots
-    if sync_state == SyncState::Scanning || sync_state == SyncState::Starting {
-        return get_animated_dots(animation_frame).to_string();
-    }
-
-    if pending_count > 0 {
-        if pending_count == 1 {
-            rust_i18n::t!("menu.file_remaining").to_string()
-        } else {
-            rust_i18n::t!("menu.files_remaining", count = pending_count).to_string()
-        }
-    } else {
-        rust_i18n::t!("menu.up_to_date").to_string()
     }
 }
 
