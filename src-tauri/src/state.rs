@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -26,7 +27,112 @@ pub enum SyncState {
     Offline,
 }
 
+/// Error returned when an invalid state transition is attempted
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidTransition {
+    pub from: SyncState,
+    pub to: SyncState,
+}
+
+impl fmt::Display for InvalidTransition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Invalid state transition: {:?} -> {:?}",
+            self.from, self.to
+        )
+    }
+}
+
+impl std::error::Error for InvalidTransition {}
+
 impl SyncState {
+    /// Returns the valid states this state can transition to.
+    ///
+    /// This defines the state machine transitions:
+    /// ```text
+    /// Starting → Scanning, NotLoggedIn, CliNotFound
+    /// NotLoggedIn → Scanning, Syncing
+    /// Scanning → Syncing, Synced, Error, Offline
+    /// Syncing → Synced, Scanning, Error, Offline
+    /// Synced → Scanning, Syncing, NotLoggedIn, Paused
+    /// Paused → Scanning, Syncing, NotLoggedIn
+    /// Error → Scanning, NotLoggedIn, CliNotFound
+    /// CliNotFound → Starting (retry)
+    /// Offline → Scanning (retry when online)
+    /// ```
+    pub fn valid_transitions(&self) -> &'static [SyncState] {
+        match self {
+            // Starting can go to scanning (normal start), not logged in, or CLI not found
+            SyncState::Starting => &[
+                SyncState::Scanning,
+                SyncState::Syncing,
+                SyncState::Synced,
+                SyncState::NotLoggedIn,
+                SyncState::CliNotFound,
+            ],
+            // Not logged in can start syncing after login
+            SyncState::NotLoggedIn => &[SyncState::Scanning, SyncState::Syncing],
+            // Scanning can find deltas (syncing), complete (synced), or fail
+            SyncState::Scanning => &[
+                SyncState::Syncing,
+                SyncState::Synced,
+                SyncState::Error,
+                SyncState::Offline,
+            ],
+            // Syncing can complete, scan again, or fail
+            SyncState::Syncing => &[
+                SyncState::Synced,
+                SyncState::Scanning,
+                SyncState::Error,
+                SyncState::Offline,
+            ],
+            // Synced can start new sync cycle, be paused, or logout
+            SyncState::Synced => &[
+                SyncState::Scanning,
+                SyncState::Syncing,
+                SyncState::NotLoggedIn,
+                SyncState::Paused,
+            ],
+            // Paused can resume or logout
+            SyncState::Paused => &[
+                SyncState::Scanning,
+                SyncState::Syncing,
+                SyncState::NotLoggedIn,
+            ],
+            // Error can retry or logout
+            SyncState::Error => &[
+                SyncState::Scanning,
+                SyncState::NotLoggedIn,
+                SyncState::CliNotFound,
+            ],
+            // CLI not found can retry (goes back to starting to recheck)
+            SyncState::CliNotFound => &[SyncState::Starting, SyncState::NotLoggedIn],
+            // Offline can retry when online (scan for changes)
+            SyncState::Offline => &[SyncState::Scanning, SyncState::Syncing, SyncState::Error],
+        }
+    }
+
+    /// Check if a transition to the given state is valid
+    pub fn can_transition_to(&self, to: SyncState) -> bool {
+        // Same state is always "valid" (no-op)
+        if *self == to {
+            return true;
+        }
+        self.valid_transitions().contains(&to)
+    }
+
+    /// Attempt a state transition, returning an error if invalid.
+    ///
+    /// Note: Transitions to the same state are always allowed (no-op).
+    pub fn try_transition(&self, to: SyncState) -> Result<SyncState, InvalidTransition> {
+        if self.can_transition_to(to) {
+            Ok(to)
+        } else {
+            Err(InvalidTransition { from: *self, to })
+        }
+    }
+
     /// Get the display text for the status menu item
     pub fn status_text(&self) -> String {
         match self {
@@ -56,6 +162,21 @@ impl SyncState {
             SyncState::CliNotFound => "error",
             SyncState::Offline => "idle",
         }
+    }
+
+    /// Check if this state represents an active sync operation
+    #[allow(dead_code)]
+    pub fn is_active(&self) -> bool {
+        matches!(self, SyncState::Scanning | SyncState::Syncing)
+    }
+
+    /// Check if this state represents an error condition
+    #[allow(dead_code)]
+    pub fn is_error(&self) -> bool {
+        matches!(
+            self,
+            SyncState::Error | SyncState::CliNotFound | SyncState::Offline
+        )
     }
 }
 
@@ -167,8 +288,71 @@ impl AppState {
         self.inner.read().await.sync_state
     }
 
+    /// Set the sync state directly (for backwards compatibility).
+    ///
+    /// Prefer using `transition_to()` for validated state changes with logging.
     pub async fn set_sync_state(&self, state: SyncState) {
-        self.inner.write().await.sync_state = state;
+        let mut inner = self.inner.write().await;
+        if inner.sync_state != state {
+            log::debug!("State change: {:?} -> {:?}", inner.sync_state, state);
+            inner.sync_state = state;
+        }
+    }
+
+    /// Attempt a validated state transition with logging.
+    ///
+    /// This method validates that the transition is allowed according to the
+    /// state machine rules defined in `SyncState::valid_transitions()`.
+    ///
+    /// Returns `Ok(new_state)` if the transition was successful, or
+    /// `Err(InvalidTransition)` if the transition is not allowed.
+    ///
+    /// Same-state transitions are always allowed (no-op).
+    #[allow(dead_code)]
+    pub async fn transition_to(&self, new_state: SyncState) -> Result<SyncState, InvalidTransition> {
+        let mut inner = self.inner.write().await;
+        let current = inner.sync_state;
+
+        // Same state is a no-op
+        if current == new_state {
+            return Ok(current);
+        }
+
+        // Validate the transition
+        let validated = current.try_transition(new_state)?;
+
+        log::info!("State transition: {:?} -> {:?}", current, validated);
+        inner.sync_state = validated;
+
+        Ok(validated)
+    }
+
+    /// Transition to a new state, logging a warning if the transition is invalid.
+    ///
+    /// This is a more permissive version of `transition_to()` that always
+    /// allows the transition but logs a warning for invalid ones.
+    /// Useful during refactoring when we want to track invalid transitions
+    /// without breaking functionality.
+    #[allow(dead_code)]
+    pub async fn transition_to_unchecked(&self, new_state: SyncState) {
+        let mut inner = self.inner.write().await;
+        let current = inner.sync_state;
+
+        if current == new_state {
+            return;
+        }
+
+        if !current.can_transition_to(new_state) {
+            log::warn!(
+                "Potentially invalid state transition: {:?} -> {:?}",
+                current,
+                new_state
+            );
+        } else {
+            log::debug!("State transition: {:?} -> {:?}", current, new_state);
+        }
+
+        inner.sync_state = new_state;
     }
 
     #[allow(dead_code)]
@@ -364,6 +548,140 @@ mod tests {
         assert_eq!(SyncState::CliNotFound.icon_suffix(), "error");
     }
 
+    // ==================== State Machine tests ====================
+
+    #[test]
+    fn test_starting_valid_transitions() {
+        let state = SyncState::Starting;
+        assert!(state.can_transition_to(SyncState::Scanning));
+        assert!(state.can_transition_to(SyncState::NotLoggedIn));
+        assert!(state.can_transition_to(SyncState::CliNotFound));
+        // Same state is always valid
+        assert!(state.can_transition_to(SyncState::Starting));
+    }
+
+    #[test]
+    fn test_starting_invalid_transition() {
+        let state = SyncState::Starting;
+        // Cannot go directly to Error or Offline from Starting
+        assert!(!state.can_transition_to(SyncState::Error));
+        assert!(!state.can_transition_to(SyncState::Offline));
+        assert!(!state.can_transition_to(SyncState::Paused));
+    }
+
+    #[test]
+    fn test_scanning_valid_transitions() {
+        let state = SyncState::Scanning;
+        assert!(state.can_transition_to(SyncState::Syncing));
+        assert!(state.can_transition_to(SyncState::Synced));
+        assert!(state.can_transition_to(SyncState::Error));
+        assert!(state.can_transition_to(SyncState::Offline));
+    }
+
+    #[test]
+    fn test_syncing_valid_transitions() {
+        let state = SyncState::Syncing;
+        assert!(state.can_transition_to(SyncState::Synced));
+        assert!(state.can_transition_to(SyncState::Scanning));
+        assert!(state.can_transition_to(SyncState::Error));
+        assert!(state.can_transition_to(SyncState::Offline));
+    }
+
+    #[test]
+    fn test_synced_valid_transitions() {
+        let state = SyncState::Synced;
+        assert!(state.can_transition_to(SyncState::Scanning));
+        assert!(state.can_transition_to(SyncState::Syncing));
+        assert!(state.can_transition_to(SyncState::NotLoggedIn));
+        assert!(state.can_transition_to(SyncState::Paused));
+    }
+
+    #[test]
+    fn test_offline_can_retry() {
+        let state = SyncState::Offline;
+        assert!(state.can_transition_to(SyncState::Scanning));
+    }
+
+    #[test]
+    fn test_try_transition_success() {
+        let state = SyncState::Starting;
+        let result = state.try_transition(SyncState::Scanning);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), SyncState::Scanning);
+    }
+
+    #[test]
+    fn test_try_transition_failure() {
+        let state = SyncState::Starting;
+        let result = state.try_transition(SyncState::Paused);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.from, SyncState::Starting);
+        assert_eq!(err.to, SyncState::Paused);
+    }
+
+    #[test]
+    fn test_try_transition_same_state() {
+        let state = SyncState::Syncing;
+        let result = state.try_transition(SyncState::Syncing);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), SyncState::Syncing);
+    }
+
+    #[test]
+    fn test_invalid_transition_display() {
+        let err = InvalidTransition {
+            from: SyncState::Starting,
+            to: SyncState::Paused,
+        };
+        let display = format!("{}", err);
+        assert!(display.contains("Starting"));
+        assert!(display.contains("Paused"));
+    }
+
+    #[test]
+    fn test_is_active() {
+        assert!(SyncState::Scanning.is_active());
+        assert!(SyncState::Syncing.is_active());
+        assert!(!SyncState::Synced.is_active());
+        assert!(!SyncState::Starting.is_active());
+        assert!(!SyncState::Error.is_active());
+    }
+
+    #[test]
+    fn test_is_error() {
+        assert!(SyncState::Error.is_error());
+        assert!(SyncState::CliNotFound.is_error());
+        assert!(SyncState::Offline.is_error());
+        assert!(!SyncState::Synced.is_error());
+        assert!(!SyncState::Syncing.is_error());
+    }
+
+    #[test]
+    fn test_all_states_have_valid_transitions() {
+        // Every state should have at least one valid transition (besides itself)
+        let all_states = [
+            SyncState::Starting,
+            SyncState::NotLoggedIn,
+            SyncState::Synced,
+            SyncState::Scanning,
+            SyncState::Syncing,
+            SyncState::Paused,
+            SyncState::Error,
+            SyncState::CliNotFound,
+            SyncState::Offline,
+        ];
+
+        for state in all_states {
+            let transitions = state.valid_transitions();
+            assert!(
+                !transitions.is_empty(),
+                "{:?} should have at least one valid transition",
+                state
+            );
+        }
+    }
+
     // ==================== StorageInfo tests ====================
 
     #[test]
@@ -436,5 +754,43 @@ mod tests {
         state.set_current_transfer(Some(transfer)).await;
         state.set_current_transfer(None).await;
         assert!(state.get_current_transfer().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_transition_to_valid() {
+        let state = AppState::new();
+        // Starting -> Scanning is valid
+        let result = state.transition_to(SyncState::Scanning).await;
+        assert!(result.is_ok());
+        assert_eq!(state.get_sync_state().await, SyncState::Scanning);
+    }
+
+    #[tokio::test]
+    async fn test_transition_to_invalid() {
+        let state = AppState::new();
+        // Starting -> Paused is invalid
+        let result = state.transition_to(SyncState::Paused).await;
+        assert!(result.is_err());
+        // State should remain Starting
+        assert_eq!(state.get_sync_state().await, SyncState::Starting);
+    }
+
+    #[tokio::test]
+    async fn test_transition_to_same_state() {
+        let state = AppState::new();
+        // Same state transitions are no-ops
+        let result = state.transition_to(SyncState::Starting).await;
+        assert!(result.is_ok());
+        assert_eq!(state.get_sync_state().await, SyncState::Starting);
+    }
+
+    #[tokio::test]
+    async fn test_transition_to_unchecked_allows_invalid() {
+        let state = AppState::new();
+        // Invalid transition but should still work (with warning logged)
+        state
+            .transition_to_unchecked(SyncState::Paused)
+            .await;
+        assert_eq!(state.get_sync_state().await, SyncState::Paused);
     }
 }
