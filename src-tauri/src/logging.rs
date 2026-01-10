@@ -3,6 +3,7 @@
 //! Logs are written to a single file that is overwritten on each app launch.
 //! This keeps log files small and focused on the current session for easier debugging.
 
+use crate::config::LogLevel;
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,7 +49,7 @@ fn get_log_file_path(log_dir: &Path) -> PathBuf {
 /// Returns the path to the log file on success (or placeholder if disabled).
 pub fn init_logging(
     logging_enabled: bool,
-    log_level: Option<&str>,
+    log_level: Option<LogLevel>,
 ) -> Result<PathBuf, fern::InitError> {
     // If logging is disabled, only log to console
     if !logging_enabled {
@@ -66,15 +67,8 @@ pub fn init_logging(
 
     let log_file = get_log_file_path(&log_dir);
 
-    // Parse log level
-    let level = match log_level.unwrap_or("info").to_lowercase().as_str() {
-        "trace" => log::LevelFilter::Trace,
-        "debug" => log::LevelFilter::Debug,
-        "info" => log::LevelFilter::Info,
-        "warn" => log::LevelFilter::Warn,
-        "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Info,
-    };
+    // Get log level from config or use default
+    let level = log_level.unwrap_or_default().to_level_filter();
 
     // Also check RUST_LOG environment variable (takes precedence)
     let level = std::env::var("RUST_LOG")
@@ -99,7 +93,7 @@ pub fn init_logging(
         Ok(f) => f,
         Err(e) => {
             eprintln!("Failed to open log file {:?}: {}", log_file, e);
-            return init_console_only(Some(log_level.unwrap_or("info")));
+            return init_console_only(log_level);
         }
     };
 
@@ -128,15 +122,8 @@ pub fn init_logging(
 }
 
 /// Fallback: console-only logging if file logging fails
-fn init_console_only(log_level: Option<&str>) -> Result<PathBuf, fern::InitError> {
-    let level = match log_level.unwrap_or("info").to_lowercase().as_str() {
-        "trace" => log::LevelFilter::Trace,
-        "debug" => log::LevelFilter::Debug,
-        "info" => log::LevelFilter::Info,
-        "warn" => log::LevelFilter::Warn,
-        "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Info,
-    };
+fn init_console_only(log_level: Option<LogLevel>) -> Result<PathBuf, fern::InitError> {
+    let level = log_level.unwrap_or_default().to_level_filter();
 
     fern::Dispatch::new()
         .format(|out, message, record| {

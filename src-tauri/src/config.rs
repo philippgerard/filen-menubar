@@ -1,6 +1,161 @@
 use crate::error::ConfigError;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
+
+/// Synchronization mode for the Filen CLI
+///
+/// Determines how files are synced between local and cloud storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncMode {
+    /// Two-way sync: changes in either direction are synced
+    #[default]
+    TwoWay,
+    /// Local to cloud: only upload local changes
+    LocalToCloud,
+    /// Cloud to local: only download cloud changes
+    CloudToLocal,
+    /// Local backup: upload local files, never delete from cloud
+    LocalBackup,
+    /// Cloud backup: download cloud files, never delete locally
+    CloudBackup,
+}
+
+impl SyncMode {
+    /// Returns the CLI-compatible string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncMode::TwoWay => "twoWay",
+            SyncMode::LocalToCloud => "localToCloud",
+            SyncMode::CloudToLocal => "cloudToLocal",
+            SyncMode::LocalBackup => "localBackup",
+            SyncMode::CloudBackup => "cloudBackup",
+        }
+    }
+}
+
+impl fmt::Display for SyncMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for SyncMode {
+    type Err = ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "twoWay" => Ok(SyncMode::TwoWay),
+            "localToCloud" => Ok(SyncMode::LocalToCloud),
+            "cloudToLocal" => Ok(SyncMode::CloudToLocal),
+            "localBackup" => Ok(SyncMode::LocalBackup),
+            "cloudBackup" => Ok(SyncMode::CloudBackup),
+            other => Err(ConfigError::InvalidSyncMode(other.to_string())),
+        }
+    }
+}
+
+impl Serialize for SyncMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SyncMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        SyncMode::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Log level for the application
+///
+/// Controls the verbosity of log output when logging is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogLevel {
+    /// Most verbose: all messages including trace-level debugging
+    Trace,
+    /// Detailed debugging information
+    Debug,
+    /// Normal operational messages
+    #[default]
+    Info,
+    /// Warning messages for potentially problematic situations
+    Warn,
+    /// Error messages only
+    Error,
+}
+
+impl LogLevel {
+    /// Returns the string representation used in config files
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+
+    /// Convert to log crate's LevelFilter
+    pub fn to_level_filter(&self) -> log::LevelFilter {
+        match self {
+            LogLevel::Trace => log::LevelFilter::Trace,
+            LogLevel::Debug => log::LevelFilter::Debug,
+            LogLevel::Info => log::LevelFilter::Info,
+            LogLevel::Warn => log::LevelFilter::Warn,
+            LogLevel::Error => log::LevelFilter::Error,
+        }
+    }
+}
+
+impl fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for LogLevel {
+    type Err = ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "trace" => Ok(LogLevel::Trace),
+            "debug" => Ok(LogLevel::Debug),
+            "info" => Ok(LogLevel::Info),
+            "warn" => Ok(LogLevel::Warn),
+            "error" => Ok(LogLevel::Error),
+            other => Err(ConfigError::InvalidLogLevel(other.to_string())),
+        }
+    }
+}
+
+impl Serialize for LogLevel {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for LogLevel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        LogLevel::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,7 +166,7 @@ pub struct Config {
     /// Remote path on Filen (usually "/")
     pub remote_path: String,
     /// Sync mode (twoWay, localToCloud, cloudToLocal, localBackup, cloudBackup)
-    pub sync_mode: String,
+    pub sync_mode: SyncMode,
     /// Auto-start sync on launch
     pub auto_start: bool,
     /// Locale override (e.g., "en", "de"). If None, uses system locale.
@@ -22,7 +177,7 @@ pub struct Config {
     pub logging_enabled: bool,
     /// Log level (trace, debug, info, warn, error). Default: info. Only used when logging_enabled is true.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub log_level: Option<String>,
+    pub log_level: Option<LogLevel>,
     /// Patterns to ignore during sync (e.g., ["Photos", "*.tmp", "node_modules"])
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignore: Vec<String>,
@@ -40,7 +195,7 @@ pub struct SyncPair {
     /// Remote path in Filen Drive (cloud path)
     pub remote: String,
     /// Synchronization mode
-    pub sync_mode: String,
+    pub sync_mode: SyncMode,
     /// Alias name for this sync pair
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
@@ -64,7 +219,7 @@ impl Default for Config {
         Self {
             local_path,
             remote_path: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::default(),
             auto_start: true,
             locale: None,
             logging_enabled: false,
@@ -133,7 +288,7 @@ impl Config {
         let sync_pair = SyncPair {
             local: self.local_path.to_string_lossy().to_string(),
             remote: self.remote_path.clone(),
-            sync_mode: self.sync_mode.clone(),
+            sync_mode: self.sync_mode,
             alias: Some("filen-menubar".to_string()),
             disable_local_trash: false,
             ignore: self.ignore.clone(),
@@ -158,12 +313,134 @@ impl Config {
 mod tests {
     use super::*;
 
+    // ==================== SyncMode tests ====================
+
+    #[test]
+    fn test_sync_mode_default() {
+        assert_eq!(SyncMode::default(), SyncMode::TwoWay);
+    }
+
+    #[test]
+    fn test_sync_mode_as_str() {
+        assert_eq!(SyncMode::TwoWay.as_str(), "twoWay");
+        assert_eq!(SyncMode::LocalToCloud.as_str(), "localToCloud");
+        assert_eq!(SyncMode::CloudToLocal.as_str(), "cloudToLocal");
+        assert_eq!(SyncMode::LocalBackup.as_str(), "localBackup");
+        assert_eq!(SyncMode::CloudBackup.as_str(), "cloudBackup");
+    }
+
+    #[test]
+    fn test_sync_mode_from_str() {
+        assert_eq!(SyncMode::from_str("twoWay").unwrap(), SyncMode::TwoWay);
+        assert_eq!(
+            SyncMode::from_str("localToCloud").unwrap(),
+            SyncMode::LocalToCloud
+        );
+        assert_eq!(
+            SyncMode::from_str("cloudToLocal").unwrap(),
+            SyncMode::CloudToLocal
+        );
+        assert_eq!(
+            SyncMode::from_str("localBackup").unwrap(),
+            SyncMode::LocalBackup
+        );
+        assert_eq!(
+            SyncMode::from_str("cloudBackup").unwrap(),
+            SyncMode::CloudBackup
+        );
+    }
+
+    #[test]
+    fn test_sync_mode_from_str_invalid() {
+        let result = SyncMode::from_str("invalid");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::InvalidSyncMode(_)
+        ));
+    }
+
+    #[test]
+    fn test_sync_mode_display() {
+        assert_eq!(format!("{}", SyncMode::TwoWay), "twoWay");
+        assert_eq!(format!("{}", SyncMode::LocalToCloud), "localToCloud");
+    }
+
+    #[test]
+    fn test_sync_mode_serde_roundtrip() {
+        let mode = SyncMode::LocalBackup;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"localBackup\"");
+        let deserialized: SyncMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, mode);
+    }
+
+    // ==================== LogLevel tests ====================
+
+    #[test]
+    fn test_log_level_default() {
+        assert_eq!(LogLevel::default(), LogLevel::Info);
+    }
+
+    #[test]
+    fn test_log_level_as_str() {
+        assert_eq!(LogLevel::Trace.as_str(), "trace");
+        assert_eq!(LogLevel::Debug.as_str(), "debug");
+        assert_eq!(LogLevel::Info.as_str(), "info");
+        assert_eq!(LogLevel::Warn.as_str(), "warn");
+        assert_eq!(LogLevel::Error.as_str(), "error");
+    }
+
+    #[test]
+    fn test_log_level_from_str() {
+        assert_eq!(LogLevel::from_str("trace").unwrap(), LogLevel::Trace);
+        assert_eq!(LogLevel::from_str("debug").unwrap(), LogLevel::Debug);
+        assert_eq!(LogLevel::from_str("info").unwrap(), LogLevel::Info);
+        assert_eq!(LogLevel::from_str("warn").unwrap(), LogLevel::Warn);
+        assert_eq!(LogLevel::from_str("error").unwrap(), LogLevel::Error);
+    }
+
+    #[test]
+    fn test_log_level_from_str_case_insensitive() {
+        assert_eq!(LogLevel::from_str("DEBUG").unwrap(), LogLevel::Debug);
+        assert_eq!(LogLevel::from_str("Info").unwrap(), LogLevel::Info);
+        assert_eq!(LogLevel::from_str("WARN").unwrap(), LogLevel::Warn);
+    }
+
+    #[test]
+    fn test_log_level_from_str_invalid() {
+        let result = LogLevel::from_str("invalid");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::InvalidLogLevel(_)
+        ));
+    }
+
+    #[test]
+    fn test_log_level_to_level_filter() {
+        assert_eq!(LogLevel::Trace.to_level_filter(), log::LevelFilter::Trace);
+        assert_eq!(LogLevel::Debug.to_level_filter(), log::LevelFilter::Debug);
+        assert_eq!(LogLevel::Info.to_level_filter(), log::LevelFilter::Info);
+        assert_eq!(LogLevel::Warn.to_level_filter(), log::LevelFilter::Warn);
+        assert_eq!(LogLevel::Error.to_level_filter(), log::LevelFilter::Error);
+    }
+
+    #[test]
+    fn test_log_level_serde_roundtrip() {
+        let level = LogLevel::Debug;
+        let json = serde_json::to_string(&level).unwrap();
+        assert_eq!(json, "\"debug\"");
+        let deserialized: LogLevel = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, level);
+    }
+
     // ==================== Default values tests ====================
 
     #[test]
     fn test_config_default_sync_mode() {
         let config = Config::default();
-        assert_eq!(config.sync_mode, "twoWay");
+        assert_eq!(config.sync_mode, SyncMode::TwoWay);
     }
 
     #[test]
@@ -209,11 +486,11 @@ mod tests {
         let config = Config {
             local_path: PathBuf::from("/home/user/MySyncFolder"),
             remote_path: "/Documents".to_string(),
-            sync_mode: "localToCloud".to_string(),
+            sync_mode: SyncMode::LocalToCloud,
             auto_start: false,
             locale: Some("de".to_string()),
             logging_enabled: true,
-            log_level: Some("debug".to_string()),
+            log_level: Some(LogLevel::Debug),
             ignore: vec!["*.tmp".to_string(), "node_modules".to_string()],
             exclude_dot_files: true,
         };
@@ -237,7 +514,7 @@ mod tests {
         let config = Config {
             local_path: PathBuf::from("/test"),
             remote_path: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             auto_start: true,
             locale: None,
             logging_enabled: false,
@@ -270,7 +547,7 @@ mod tests {
         let config = Config {
             local_path: PathBuf::from("/test"),
             remote_path: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             auto_start: true,
             locale: None,
             logging_enabled: false,
@@ -288,7 +565,7 @@ mod tests {
         let config = Config {
             local_path: PathBuf::from("/test"),
             remote_path: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             auto_start: true,
             locale: Some("en".to_string()),
             logging_enabled: false,
@@ -313,9 +590,37 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.local_path, PathBuf::from("/Users/test/Filen"));
         assert_eq!(config.remote_path, "/Backup");
-        assert_eq!(config.sync_mode, "cloudToLocal");
+        assert_eq!(config.sync_mode, SyncMode::CloudToLocal);
         assert!(!config.auto_start);
         assert!(config.locale.is_none());
+    }
+
+    #[test]
+    fn test_config_deserialize_invalid_sync_mode_fails() {
+        let json = r#"{
+            "localPath": "/Users/test/Filen",
+            "remotePath": "/",
+            "syncMode": "invalidMode",
+            "autoStart": true
+        }"#;
+
+        let result: Result<Config, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_deserialize_invalid_log_level_fails() {
+        let json = r#"{
+            "localPath": "/Users/test/Filen",
+            "remotePath": "/",
+            "syncMode": "twoWay",
+            "autoStart": true,
+            "loggingEnabled": true,
+            "logLevel": "invalid"
+        }"#;
+
+        let result: Result<Config, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 
     // ==================== File I/O tests with tempfile ====================
@@ -332,11 +637,11 @@ mod tests {
         let original_config = Config {
             local_path: PathBuf::from("/custom/sync/path"),
             remote_path: "/MyFolder".to_string(),
-            sync_mode: "localBackup".to_string(),
+            sync_mode: SyncMode::LocalBackup,
             auto_start: false,
             locale: Some("fr".to_string()),
             logging_enabled: true,
-            log_level: Some("debug".to_string()),
+            log_level: Some(LogLevel::Debug),
             ignore: vec!["*.log".to_string()],
             exclude_dot_files: true,
         };
@@ -366,7 +671,7 @@ mod tests {
         let config = Config {
             local_path: sync_path.clone(),
             remote_path: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             auto_start: true,
             locale: None,
             logging_enabled: false,
@@ -394,7 +699,7 @@ mod tests {
         let config = Config {
             local_path: sync_path.clone(),
             remote_path: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             auto_start: true,
             locale: None,
             logging_enabled: false,
@@ -469,7 +774,7 @@ mod tests {
         let pair = SyncPair {
             local: "/home/user/Filen".to_string(),
             remote: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             alias: Some("main".to_string()),
             disable_local_trash: false,
             ignore: vec!["*.log".to_string(), "Photos".to_string()],
@@ -492,7 +797,7 @@ mod tests {
         let pair = SyncPair {
             local: "/home/user/Filen".to_string(),
             remote: "/".to_string(),
-            sync_mode: "twoWay".to_string(),
+            sync_mode: SyncMode::TwoWay,
             alias: None,
             disable_local_trash: false,
             ignore: Vec::new(),

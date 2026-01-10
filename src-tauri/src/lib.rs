@@ -266,7 +266,7 @@ pub fn run() {
     };
 
     // Initialize logging (file logging only if enabled in config)
-    match logging::init_logging(config.logging_enabled, config.log_level.as_deref()) {
+    match logging::init_logging(config.logging_enabled, config.log_level) {
         Ok(log_path) => {
             log::info!("Starting Filen Menubar");
             if config.logging_enabled {

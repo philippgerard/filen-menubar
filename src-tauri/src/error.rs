@@ -48,6 +48,12 @@ pub enum ConfigError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Invalid sync mode: {0}. Valid values: twoWay, localToCloud, cloudToLocal, localBackup, cloudBackup")]
+    InvalidSyncMode(String),
+
+    #[error("Invalid log level: {0}. Valid values: trace, debug, info, warn, error")]
+    InvalidLogLevel(String),
 }
 
 /// CLI process errors
