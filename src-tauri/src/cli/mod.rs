@@ -4,6 +4,7 @@
 //! - Finding the Filen CLI binary on the system (`discovery`)
 //! - Parsing JSON events from the CLI's verbose output (`events`)
 //! - Detecting network errors for offline status (`network`)
+//! - Process abstraction for testability (`process`)
 //! - Managing the CLI subprocess lifecycle (`CliManager`)
 //!
 //! ## Architecture
@@ -22,13 +23,23 @@
 //! 2. Events are parsed into `CliEvent` variants
 //! 3. `handle_cli_event()` processes events and updates `AppState`
 //! 4. State changes propagate to the tray UI
+//!
+//! ## Testing
+//!
+//! The `process` module provides a `ProcessRunner` trait that can be mocked
+//! for testing CLI interactions without spawning real processes.
 
 mod discovery;
 mod events;
 pub mod network;
+pub mod process;
 
 pub use discovery::find_filen_cli;
 pub use events::{CliErrorEvent, CliEvent};
+
+// Re-export process types for dependency injection (currently unused, for future testability)
+#[allow(unused_imports)]
+pub use process::{ProcessHandle, ProcessRunner, TokioProcessRunner};
 
 use crate::config::Config;
 use crate::error::CliError;

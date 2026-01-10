@@ -1033,6 +1033,7 @@ dependencies = [
 name = "filen-menubar"
 version = "0.1.19"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs 5.0.1",
  "fern",
