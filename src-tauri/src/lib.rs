@@ -1,11 +1,13 @@
 mod actions;
-mod cli;
-mod config;
 mod credentials;
-mod error;
 mod logging;
-mod state;
 mod tray;
+
+// Public modules for integration testing
+pub mod cli;
+pub mod config;
+pub mod error;
+pub mod state;
 
 use actions::ActionContext;
 use cli::CliManager;
