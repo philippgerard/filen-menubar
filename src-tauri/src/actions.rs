@@ -192,7 +192,6 @@ pub async fn quit(cli_manager: &CliManager, app_handle: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     // Note: Most action handlers involve system interactions (opening files,
     // showing dialogs, etc.) that can't be easily unit tested without mocking.
@@ -242,15 +241,7 @@ mod tests {
         assert!(!log_dir.as_os_str().is_empty());
     }
 
-    #[test]
-    fn test_open_folder_with_nonexistent_path() {
-        // Verify open_folder doesn't panic with invalid path
-        // It will log an error but shouldn't crash
-        let config = Config {
-            local_path: PathBuf::from("/nonexistent/path/that/does/not/exist"),
-            ..Config::default()
-        };
-        // This should complete without panicking
-        open_folder(&config);
-    }
+    // Note: We don't test open_folder, show_logs, open_web_ui directly
+    // because they trigger system dialogs/file managers which would
+    // interfere with automated testing.
 }
