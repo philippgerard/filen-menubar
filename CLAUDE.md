@@ -36,24 +36,67 @@ cargo fmt --manifest-path src-tauri/Cargo.toml
 
 This is a **Tauri v2 menubar-only application** that wraps the Filen CLI to provide system tray sync status. There is no frontend UI - the app runs entirely as a system tray icon with a context menu.
 
-### Core Components (src-tauri/src/)
+### Module Structure (src-tauri/src/)
 
-- **lib.rs**: Main app entry point. Handles tray action routing (`handle_tray_action`), spawns the status update loop, manages auto-start logic, and hides from the macOS dock.
-- **cli.rs**: `CliManager` - Spawns and monitors the `filen` CLI subprocess. Parses JSON events from `--verbose` mode to track sync state (look for `cycleSuccess`, `cycleError`, `deltasCount`, `transfer` events).
-- **state.rs**: `AppState` - Thread-safe shared state using `tokio::sync::RwLock`. Tracks `SyncState` enum and pending file count.
-- **config.rs**: Configuration loading/saving from platform-specific JSON files.
-- **credentials.rs**: Checks if Filen CLI session exists (doesn't store credentials itself).
-- **tray/**: Platform-specific tray implementations
-  - **macos.rs**: Uses Tauri's native `TrayIcon` with in-place menu updates
-  - **linux.rs**: Uses `ksni` crate for KDE/freedesktop StatusNotifierItem
+```
+src-tauri/src/
+├── lib.rs          # App entry point, status loop, tray action dispatch
+├── actions.rs      # Tray action handlers (command pattern)
+├── cli/
+│   ├── mod.rs      # CliManager - subprocess lifecycle
+│   ├── events.rs   # CLI JSON event parsing
+│   ├── network.rs  # Network error detection
+│   ├── discovery.rs # CLI binary discovery
+│   └── process.rs  # ProcessRunner trait (for testability)
+├── config.rs       # Configuration with SyncMode/LogLevel enums
+├── credentials.rs  # CLI session detection
+├── error.rs        # Unified error types
+├── logging.rs      # File logging setup
+├── state.rs        # AppState with watch channel for reactive updates
+└── tray/
+    ├── mod.rs      # TrayInterface trait, shared helpers
+    ├── macos.rs    # Tauri TrayIcon implementation
+    └── linux.rs    # ksni StatusNotifierItem implementation
+```
+
+### Core Components
+
+- **lib.rs**: Main app entry point. Dispatches tray actions to `actions.rs`, runs the reactive status update loop, manages auto-start logic, and hides from the macOS dock.
+- **actions.rs**: Individual handler functions for each tray menu action (command pattern). Uses `ActionContext` to group dependencies.
+- **cli/**: CLI subprocess management
+  - **mod.rs**: `CliManager` - Spawns and monitors `filen --verbose sync`
+  - **events.rs**: Parses JSON events (`cycleSuccess`, `deltasCount`, `transfer`, etc.)
+  - **network.rs**: Detects network errors for offline state
+  - **process.rs**: `ProcessRunner` trait for dependency injection (enables mocking)
+- **state.rs**: `AppState` with `tokio::sync::watch` channel for reactive UI updates. Includes state machine validation for `SyncState` transitions.
+- **config.rs**: Configuration with type-safe `SyncMode` and `LogLevel` enums.
+- **error.rs**: Unified `AppError`, `CliError`, `ConfigError`, `CredentialError` types.
+- **tray/**: Platform-specific implementations behind `TrayInterface` trait
 
 ### Event Flow
 
+```
+User clicks menu     CLI emits JSON      State changes
+      │                    │                  │
+      ▼                    ▼                  ▼
+  TrayAction ──────► CliManager ──────► AppState
+      │              (parse events)     (watch channel)
+      ▼                                       │
+  actions.rs                                  ▼
+  (handlers)                            status_update_loop
+                                        (reactive + timer)
+                                              │
+                                              ▼
+                                        TrayInterface
+                                        (update icon/menu)
+```
+
 1. User clicks menu item → `TrayAction` sent via `mpsc::unbounded_channel`
-2. `handle_tray_action` in lib.rs routes to appropriate handler
-3. For sync operations, `CliManager::start_sync` spawns `filen --verbose sync` subprocess
-4. Stdout is parsed line-by-line for JSON events that update `AppState`
-5. `status_update_loop` polls `AppState` every 2 seconds and updates tray via `TrayInterface` trait
+2. `handle_tray_action` dispatches to handler in `actions.rs`
+3. For sync: `CliManager::start_sync` spawns `filen --verbose sync`
+4. CLI stdout parsed for JSON events → `AppState` updated
+5. Watch channel notifies `status_update_loop` → tray updated immediately
+6. Animation timer (500ms) updates icon frames independently
 
 ### Key Design Decisions
 
