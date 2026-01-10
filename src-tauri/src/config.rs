@@ -106,7 +106,7 @@ impl LogLevel {
     }
 
     /// Convert to log crate's LevelFilter
-    pub fn to_level_filter(&self) -> log::LevelFilter {
+    pub fn to_level_filter(self) -> log::LevelFilter {
         match self {
             LogLevel::Trace => log::LevelFilter::Trace,
             LogLevel::Debug => log::LevelFilter::Debug,
