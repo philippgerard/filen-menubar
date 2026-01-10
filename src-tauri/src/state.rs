@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 
 /// Represents the current sync state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -256,10 +256,30 @@ impl StorageInfo {
     }
 }
 
+/// Snapshot of state changes for reactive UI updates
+#[derive(Debug, Clone)]
+pub struct StateSnapshot {
+    pub sync_state: SyncState,
+    pub pending_count: u32,
+    pub current_transfer: Option<CurrentTransfer>,
+}
+
+impl Default for StateSnapshot {
+    fn default() -> Self {
+        Self {
+            sync_state: SyncState::Starting,
+            pending_count: 0,
+            current_transfer: None,
+        }
+    }
+}
+
 /// Application state shared across the app
 #[derive(Debug, Clone)]
 pub struct AppState {
     inner: Arc<RwLock<AppStateInner>>,
+    /// Watch channel sender for notifying subscribers of state changes
+    notify_tx: Arc<watch::Sender<StateSnapshot>>,
 }
 
 #[derive(Debug)]
@@ -273,6 +293,7 @@ struct AppStateInner {
 
 impl AppState {
     pub fn new() -> Self {
+        let (notify_tx, _) = watch::channel(StateSnapshot::default());
         Self {
             inner: Arc::new(RwLock::new(AppStateInner {
                 sync_state: SyncState::Starting,
@@ -281,7 +302,28 @@ impl AppState {
                 pending_count: 0,
                 current_transfer: None,
             })),
+            notify_tx: Arc::new(notify_tx),
         }
+    }
+
+    /// Subscribe to state changes.
+    ///
+    /// Returns a watch receiver that will be notified whenever
+    /// sync_state, pending_count, or current_transfer changes.
+    /// The receiver can use `changed().await` to wait for updates.
+    pub fn subscribe(&self) -> watch::Receiver<StateSnapshot> {
+        self.notify_tx.subscribe()
+    }
+
+    /// Notify subscribers of a state change
+    fn notify(&self, inner: &AppStateInner) {
+        let snapshot = StateSnapshot {
+            sync_state: inner.sync_state,
+            pending_count: inner.pending_count,
+            current_transfer: inner.current_transfer.clone(),
+        };
+        // Ignore send errors (no receivers)
+        let _ = self.notify_tx.send(snapshot);
     }
 
     pub async fn get_sync_state(&self) -> SyncState {
@@ -296,6 +338,7 @@ impl AppState {
         if inner.sync_state != state {
             log::debug!("State change: {:?} -> {:?}", inner.sync_state, state);
             inner.sync_state = state;
+            self.notify(&inner);
         }
     }
 
@@ -323,6 +366,7 @@ impl AppState {
 
         log::info!("State transition: {:?} -> {:?}", current, validated);
         inner.sync_state = validated;
+        self.notify(&inner);
 
         Ok(validated)
     }
@@ -353,6 +397,7 @@ impl AppState {
         }
 
         inner.sync_state = new_state;
+        self.notify(&inner);
     }
 
     #[allow(dead_code)]
@@ -375,6 +420,7 @@ impl AppState {
         inner.is_logged_in = logged_in;
         if !logged_in {
             inner.sync_state = SyncState::NotLoggedIn;
+            self.notify(&inner);
         }
     }
 
@@ -383,15 +429,22 @@ impl AppState {
     }
 
     pub async fn set_pending_count(&self, count: u32) {
-        self.inner.write().await.pending_count = count;
+        let mut inner = self.inner.write().await;
+        if inner.pending_count != count {
+            inner.pending_count = count;
+            self.notify(&inner);
+        }
     }
 
+    #[allow(dead_code)]
     pub async fn get_current_transfer(&self) -> Option<CurrentTransfer> {
         self.inner.read().await.current_transfer.clone()
     }
 
     pub async fn set_current_transfer(&self, transfer: Option<CurrentTransfer>) {
-        self.inner.write().await.current_transfer = transfer;
+        let mut inner = self.inner.write().await;
+        inner.current_transfer = transfer;
+        self.notify(&inner);
     }
 
     /// Update progress of the current transfer (bytes transferred)
@@ -400,6 +453,7 @@ impl AppState {
         let mut inner = self.inner.write().await;
         if let Some(ref mut transfer) = inner.current_transfer {
             transfer.bytes = bytes;
+            self.notify(&inner);
         }
     }
 }
@@ -792,5 +846,86 @@ mod tests {
             .transition_to_unchecked(SyncState::Paused)
             .await;
         assert_eq!(state.get_sync_state().await, SyncState::Paused);
+    }
+
+    // ==================== Watch channel tests ====================
+
+    #[tokio::test]
+    async fn test_subscribe_receives_initial_state() {
+        let state = AppState::new();
+        let rx = state.subscribe();
+        let snapshot = rx.borrow();
+        assert_eq!(snapshot.sync_state, SyncState::Starting);
+        assert_eq!(snapshot.pending_count, 0);
+        assert!(snapshot.current_transfer.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_notified_on_sync_state_change() {
+        let state = AppState::new();
+        let mut rx = state.subscribe();
+
+        // Change state
+        state.set_sync_state(SyncState::Scanning).await;
+
+        // Should be notified
+        assert!(rx.changed().await.is_ok());
+        assert_eq!(rx.borrow().sync_state, SyncState::Scanning);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_notified_on_pending_count_change() {
+        let state = AppState::new();
+        let mut rx = state.subscribe();
+
+        // Change pending count
+        state.set_pending_count(5).await;
+
+        // Should be notified
+        assert!(rx.changed().await.is_ok());
+        assert_eq!(rx.borrow().pending_count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_not_notified_on_same_value() {
+        let state = AppState::new();
+        let mut rx = state.subscribe();
+
+        // Set same state (Starting -> Starting)
+        state.set_sync_state(SyncState::Starting).await;
+
+        // Should NOT be notified (use timeout to verify)
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            rx.changed(),
+        )
+        .await;
+
+        // Should timeout because no notification was sent
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_subscribers() {
+        let state = AppState::new();
+        let mut rx1 = state.subscribe();
+        let mut rx2 = state.subscribe();
+
+        // Change state
+        state.set_sync_state(SyncState::Synced).await;
+
+        // Both should be notified
+        assert!(rx1.changed().await.is_ok());
+        assert!(rx2.changed().await.is_ok());
+        assert_eq!(rx1.borrow().sync_state, SyncState::Synced);
+        assert_eq!(rx2.borrow().sync_state, SyncState::Synced);
+    }
+
+    #[test]
+    fn test_state_snapshot_default() {
+        let snapshot = StateSnapshot::default();
+        assert_eq!(snapshot.sync_state, SyncState::Starting);
+        assert_eq!(snapshot.pending_count, 0);
+        assert!(snapshot.current_transfer.is_none());
     }
 }

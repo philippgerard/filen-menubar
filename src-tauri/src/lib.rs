@@ -9,7 +9,7 @@ mod tray;
 use cli::CliManager;
 use config::Config;
 use credentials::CredentialManager;
-use state::{AppState, SyncState};
+use state::{AppState, StateSnapshot, SyncState};
 use std::sync::Arc;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::mpsc;
@@ -196,7 +196,20 @@ async fn handle_tray_action(
     }
 }
 
+/// Apply a state snapshot to the tray UI
+fn apply_state_to_tray(tray: &Arc<dyn TrayInterface>, snapshot: &StateSnapshot, animation_frame: u8) {
+    tray.update_status(&snapshot.sync_state.status_text());
+    tray.update_icon(snapshot.sync_state, animation_frame);
+    tray.update_pending_count(snapshot.pending_count);
+    tray.update_current_transfer(snapshot.current_transfer.as_ref());
+}
+
 /// Start the status update loop
+///
+/// This uses a hybrid approach:
+/// - Reactive updates via watch channel when state changes
+/// - Timer-based updates for icon animation (every 500ms)
+/// - Auto-retry logic for offline state (every 30s)
 async fn status_update_loop(
     app_state: AppState,
     tray: Arc<dyn TrayInterface>,
@@ -204,53 +217,60 @@ async fn status_update_loop(
     config: Config,
 ) {
     log::info!("Status update loop started");
-    // Use shorter interval (500ms) for smoother progress updates during transfers
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
-    let mut tick_count = 0u32;
-    let mut offline_retry_counter = 0u32;
+    
+    // Subscribe to state changes
+    let mut state_rx = app_state.subscribe();
+    
+    // Animation timer (500ms for smooth icon pulsing)
+    let mut animation_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+    let mut animation_frame = 0u8;
+    let mut offline_ticks = 0u32;
+    
+    // Track current state for animation updates
+    let mut current_snapshot = StateSnapshot::default();
 
     loop {
-        interval.tick().await;
-        tick_count += 1;
-
-        let sync_state = app_state.get_sync_state().await;
-
-        // Log first few ticks and whenever state changes
-        if tick_count <= 3 {
-            log::debug!("Status loop tick {}: state={:?}", tick_count, sync_state);
-        }
-
-        // Auto-retry when offline: attempt to reconnect every ~30 seconds
-        // (60 ticks at 500ms intervals = 30 seconds)
-        if sync_state == SyncState::Offline {
-            offline_retry_counter += 1;
-            if offline_retry_counter >= 60 {
-                offline_retry_counter = 0;
-                log::info!("Attempting to reconnect after offline state...");
-                // Set to scanning state before retrying
-                app_state.set_sync_state(SyncState::Scanning).await;
-                if let Err(e) = cli_manager.start_sync(&config).await {
-                    log::debug!("Reconnect attempt failed: {}", e);
-                    // start_sync failure will set the state back to Error/Offline via CLI events
+        tokio::select! {
+            // React to state changes immediately
+            result = state_rx.changed() => {
+                if result.is_err() {
+                    // Channel closed, shouldn't happen but handle gracefully
+                    log::error!("State watch channel closed");
+                    break;
+                }
+                
+                current_snapshot = state_rx.borrow().clone();
+                log::debug!("Reactive state update: {:?}", current_snapshot.sync_state);
+                apply_state_to_tray(&tray, &current_snapshot, animation_frame);
+                
+                // Reset offline counter on state change
+                if current_snapshot.sync_state != SyncState::Offline {
+                    offline_ticks = 0;
                 }
             }
-        } else {
-            offline_retry_counter = 0;
+            
+            // Animation timer for icon pulsing and offline retry
+            _ = animation_interval.tick() => {
+                animation_frame = (animation_frame + 1) % 4;
+                
+                // Update icon animation frame
+                tray.update_icon(current_snapshot.sync_state, animation_frame);
+                
+                // Auto-retry when offline: attempt to reconnect every ~30 seconds
+                // (60 ticks at 500ms intervals = 30 seconds)
+                if current_snapshot.sync_state == SyncState::Offline {
+                    offline_ticks += 1;
+                    if offline_ticks >= 60 {
+                        offline_ticks = 0;
+                        log::info!("Attempting to reconnect after offline state...");
+                        app_state.set_sync_state(SyncState::Scanning).await;
+                        if let Err(e) = cli_manager.start_sync(&config).await {
+                            log::debug!("Reconnect attempt failed: {}", e);
+                        }
+                    }
+                }
+            }
         }
-
-        tray.update_status(&sync_state.status_text());
-        // Animation frame cycles 0-3 for pulsing icon animation
-        // (macOS uses 4 frames, Linux uses mod 3 internally for its own animation)
-        let animation_frame = (tick_count % 4) as u8;
-        tray.update_icon(sync_state, animation_frame);
-
-        // Update pending file count
-        let pending_count = app_state.get_pending_count().await;
-        tray.update_pending_count(pending_count);
-
-        // Update current transfer display
-        let current_transfer = app_state.get_current_transfer().await;
-        tray.update_current_transfer(current_transfer.as_ref());
     }
 }
 
