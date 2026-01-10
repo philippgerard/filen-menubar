@@ -1,3 +1,4 @@
+mod actions;
 mod cli;
 mod config;
 mod credentials;
@@ -6,12 +7,12 @@ mod logging;
 mod state;
 mod tray;
 
+use actions::ActionContext;
 use cli::CliManager;
 use config::Config;
 use credentials::CredentialManager;
 use state::{AppState, StateSnapshot, SyncState};
 use std::sync::Arc;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::mpsc;
 use tray::{TrayAction, TrayInterface};
 
@@ -33,7 +34,7 @@ fn init_locale(config: &Config) {
     rust_i18n::set_locale(&locale);
 }
 
-/// Handle tray menu actions
+/// Handle tray menu actions by dispatching to the appropriate handler
 async fn handle_tray_action(
     action: TrayAction,
     app_state: &AppState,
@@ -42,157 +43,24 @@ async fn handle_tray_action(
     tray: &Arc<dyn TrayInterface>,
     app_handle: &tauri::AppHandle,
 ) {
+    // Create action context for handlers that need full context
+    let ctx = ActionContext {
+        app_state,
+        cli_manager,
+        config,
+        tray,
+        app_handle,
+    };
+
     match action {
-        TrayAction::OpenFolder => {
-            log::info!("Opening sync folder: {:?}", config.local_path);
-            if let Err(e) = open::that(&config.local_path) {
-                log::error!("Failed to open folder: {}", e);
-            }
-        }
-        TrayAction::OpenWebUI => {
-            log::info!("Opening Filen web UI");
-            if let Err(e) = open::that("https://app.filen.io") {
-                log::error!("Failed to open web UI: {}", e);
-            }
-        }
-        TrayAction::Login => {
-            log::info!("Login requested");
-
-            // Check if CLI session exists
-            if CredentialManager::exists() {
-                log::info!("Found Filen CLI session, starting sync");
-                app_state.set_logged_in(true).await;
-                tray.set_login_state(Some(true));
-                tray.update_status(&SyncState::Syncing.status_text());
-
-                if let Err(e) = cli_manager.start_sync(config).await {
-                    log::error!("Failed to start sync: {}", e);
-                    app_state.set_sync_state(SyncState::Error).await;
-                }
-            } else {
-                log::info!("No Filen CLI session found. Please run 'filen' first to authenticate.");
-            }
-        }
-        TrayAction::Logout => {
-            log::info!("Logout requested");
-
-            // Show confirmation dialog
-            let app_state = app_state.clone();
-            let tray = tray.clone();
-
-            let confirmed = app_handle
-                .dialog()
-                .message(rust_i18n::t!("dialog.logout_message"))
-                .title(rust_i18n::t!("dialog.logout_title"))
-                .kind(MessageDialogKind::Warning)
-                .buttons(MessageDialogButtons::OkCancelCustom(
-                    rust_i18n::t!("dialog.logout_confirm").to_string(),
-                    rust_i18n::t!("dialog.logout_cancel").to_string(),
-                ))
-                .blocking_show();
-
-            if confirmed {
-                log::info!("Logout confirmed");
-                cli_manager.stop_sync().await;
-                let _ = CredentialManager::delete();
-                app_state.set_logged_in(false).await;
-                app_state.set_sync_state(SyncState::NotLoggedIn).await;
-                tray.set_login_state(Some(false));
-                tray.update_status(&SyncState::NotLoggedIn.status_text());
-            } else {
-                log::info!("Logout cancelled");
-            }
-        }
-        TrayAction::Settings => {
-            log::info!("Settings requested");
-            // Open config file in default editor
-            if let Ok(config_path) = Config::config_path() {
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = std::process::Command::new("open")
-                        .arg("-a")
-                        .arg("TextEdit")
-                        .arg(&config_path)
-                        .spawn()
-                    {
-                        log::error!("Failed to open config in TextEdit: {}", e);
-                    }
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    // On Linux, try xdg-open first, fall back to common editors
-                    let opened = std::process::Command::new("xdg-open")
-                        .arg(&config_path)
-                        .spawn()
-                        .is_ok()
-                        || std::process::Command::new("gedit")
-                            .arg(&config_path)
-                            .spawn()
-                            .is_ok()
-                        || std::process::Command::new("kate")
-                            .arg(&config_path)
-                            .spawn()
-                            .is_ok()
-                        || std::process::Command::new("xed")
-                            .arg(&config_path)
-                            .spawn()
-                            .is_ok()
-                        || std::process::Command::new("nano")
-                            .arg(&config_path)
-                            .spawn()
-                            .is_ok();
-
-                    if !opened {
-                        log::error!(
-                            "Failed to open config file. Please edit manually: {:?}",
-                            config_path
-                        );
-                    }
-                }
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-                {
-                    if let Err(e) = open::that(&config_path) {
-                        log::error!("Failed to open config: {}", e);
-                    }
-                }
-            }
-        }
-        TrayAction::ShowLogs => {
-            log::info!("Show logs requested");
-            let log_dir = logging::get_log_dir();
-            // Create the directory if it doesn't exist
-            if let Err(e) = std::fs::create_dir_all(&log_dir) {
-                log::error!("Failed to create log directory: {}", e);
-            }
-            if let Err(e) = open::that(&log_dir) {
-                log::error!("Failed to open log directory: {}", e);
-            }
-        }
-        TrayAction::About => {
-            log::info!("About requested");
-            // Show native About dialog
-            let version = env!("CARGO_PKG_VERSION");
-            let about_text = format!(
-                "Version {}\n\n\
-                A lightweight menubar app for Filen cloud sync.\n\n\
-                Author: Philipp Gerard\n\
-                License: MIT\n\n\
-                https://github.com/philippgerard/filen-menubar",
-                version
-            );
-
-            app_handle
-                .dialog()
-                .message(about_text)
-                .title("Filen Menubar")
-                .kind(MessageDialogKind::Info)
-                .blocking_show();
-        }
-        TrayAction::Quit => {
-            log::info!("Quit requested");
-            cli_manager.stop_sync().await;
-            app_handle.exit(0);
-        }
+        TrayAction::OpenFolder => actions::open_folder(config),
+        TrayAction::OpenWebUI => actions::open_web_ui(),
+        TrayAction::Login => actions::login(&ctx).await,
+        TrayAction::Logout => actions::logout(&ctx).await,
+        TrayAction::Settings => actions::open_settings(),
+        TrayAction::ShowLogs => actions::show_logs(),
+        TrayAction::About => actions::show_about(app_handle),
+        TrayAction::Quit => actions::quit(cli_manager, app_handle).await,
     }
 }
 
