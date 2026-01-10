@@ -1,16 +1,6 @@
+use crate::error::ConfigError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum ConfigError {
-    #[error("Failed to get config directory")]
-    NoConfigDir,
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-}
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

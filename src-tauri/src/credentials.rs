@@ -1,14 +1,5 @@
+use crate::error::CredentialError;
 use std::path::PathBuf;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum CredentialError {
-    #[allow(dead_code)]
-    #[error("Credentials not found")]
-    NotFound,
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
 
 /// Credential manager that detects Filen CLI's stored session
 pub struct CredentialManager;

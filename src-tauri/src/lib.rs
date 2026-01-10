@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod credentials;
+mod error;
 mod logging;
 mod state;
 mod tray;

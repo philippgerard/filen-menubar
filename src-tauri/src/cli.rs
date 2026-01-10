@@ -1,10 +1,10 @@
 use crate::config::Config;
+use crate::error::CliError;
 use crate::state::{AppState, CurrentTransfer, StorageInfo, SyncState, TransferDirection};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
@@ -282,17 +282,7 @@ fn build_path_env(bin_dir: &std::path::Path) -> String {
     format!("{}:{}", bin_dir.display(), system_paths)
 }
 
-#[derive(Error, Debug)]
-pub enum CliError {
-    #[error("Failed to spawn CLI process: {0}")]
-    Spawn(#[from] std::io::Error),
-    #[allow(dead_code)]
-    #[error("CLI not found. Please install filen-cli")]
-    NotFound,
-    #[allow(dead_code)]
-    #[error("CLI process exited unexpectedly")]
-    ProcessExited,
-}
+
 
 /// Messages sent from CLI process monitor
 #[allow(dead_code)]
@@ -579,10 +569,7 @@ impl CliManager {
         // Generate syncPairs.json with ignore patterns
         let sync_pairs_path = config.write_sync_pairs().map_err(|e| {
             log::error!("Failed to write sync pairs: {}", e);
-            CliError::Spawn(std::io::Error::other(format!(
-                "Failed to write sync pairs: {}",
-                e
-            )))
+            CliError::SyncPairs(e.to_string())
         })?;
 
         log::info!("Generated syncPairs.json at: {:?}", sync_pairs_path);
@@ -811,10 +798,7 @@ impl CliManager {
         // Generate syncPairs.json with ignore patterns
         let sync_pairs_path = config.write_sync_pairs().map_err(|e| {
             log::error!("Failed to write sync pairs: {}", e);
-            CliError::Spawn(std::io::Error::other(format!(
-                "Failed to write sync pairs: {}",
-                e
-            )))
+            CliError::SyncPairs(e.to_string())
         })?;
 
         log::info!("Running one-shot sync with config: {:?}", sync_pairs_path);
