@@ -80,6 +80,7 @@ fn apply_state_to_tray(tray: &Arc<dyn TrayInterface>, snapshot: &StateSnapshot, 
 /// - Reactive updates via watch channel when state changes
 /// - Timer-based updates for icon animation (every 500ms)
 /// - Auto-retry logic for offline state (every 30s)
+/// - Auto-restart logic for error state with exponential backoff
 async fn status_update_loop(
     app_state: AppState,
     tray: Arc<dyn TrayInterface>,
@@ -95,6 +96,12 @@ async fn status_update_loop(
     let mut animation_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
     let mut animation_frame = 0u8;
     let mut offline_ticks = 0u32;
+    
+    // Error restart state with exponential backoff
+    // Delays: 5s, 10s, 20s, 40s, 60s (capped)
+    let mut error_ticks = 0u32;
+    let mut error_restart_delay_secs = 5u32;
+    const MAX_ERROR_RESTART_DELAY_SECS: u32 = 60;
     
     // Track current state for animation updates
     let mut current_snapshot = StateSnapshot::default();
@@ -113,13 +120,22 @@ async fn status_update_loop(
                 log::debug!("Reactive state update: {:?}", current_snapshot.sync_state);
                 apply_state_to_tray(&tray, &current_snapshot, animation_frame);
                 
-                // Reset offline counter on state change
+                // Reset counters on state change
                 if current_snapshot.sync_state != SyncState::Offline {
                     offline_ticks = 0;
                 }
+                if current_snapshot.sync_state != SyncState::Error {
+                    error_ticks = 0;
+                    // Reset backoff on successful state transition (not just leaving error)
+                    if current_snapshot.sync_state == SyncState::Synced 
+                        || current_snapshot.sync_state == SyncState::Syncing 
+                    {
+                        error_restart_delay_secs = 5;
+                    }
+                }
             }
             
-            // Animation timer for icon pulsing and offline retry
+            // Animation timer for icon pulsing and auto-retry
             _ = animation_interval.tick() => {
                 animation_frame = (animation_frame + 1) % 4;
                 
@@ -137,6 +153,30 @@ async fn status_update_loop(
                         if let Err(e) = cli_manager.start_sync(&config).await {
                             log::debug!("Reconnect attempt failed: {}", e);
                         }
+                    }
+                }
+                
+                // Auto-restart on error: restart CLI with exponential backoff
+                // This handles CLI crashes (e.g., RangeError in Node.js)
+                if current_snapshot.sync_state == SyncState::Error {
+                    error_ticks += 1;
+                    // Convert delay seconds to ticks (2 ticks per second at 500ms intervals)
+                    let delay_ticks = error_restart_delay_secs * 2;
+                    if error_ticks >= delay_ticks {
+                        error_ticks = 0;
+                        log::info!(
+                            "Attempting to restart sync after CLI error (delay was {}s)...",
+                            error_restart_delay_secs
+                        );
+                        app_state.set_sync_state(SyncState::Scanning).await;
+                        if let Err(e) = cli_manager.start_sync(&config).await {
+                            log::warn!("Restart attempt failed: {}", e);
+                            // Increase backoff for next attempt (exponential with cap)
+                            error_restart_delay_secs = 
+                                (error_restart_delay_secs * 2).min(MAX_ERROR_RESTART_DELAY_SECS);
+                        }
+                        // Note: If start_sync succeeds but CLI crashes again,
+                        // we'll enter Error state again and the backoff continues
                     }
                 }
             }
