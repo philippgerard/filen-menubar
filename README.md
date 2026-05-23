@@ -2,6 +2,8 @@
 
 A lightweight, native menubar/system tray application for [Filen.io](https://filen.io) cloud sync on macOS and Linux.
 
+<img width="224" height="315" alt="image" src="https://github.com/user-attachments/assets/297db40d-2ac9-467a-9fe3-c537f2090ac2" />
+
 ## Features
 
 - **Menubar-only interface** - No windows, just a clean system tray icon
