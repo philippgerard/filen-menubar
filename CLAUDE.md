@@ -30,6 +30,9 @@ cargo clippy --manifest-path src-tauri/Cargo.toml
 
 # Rust formatting
 cargo fmt --manifest-path src-tauri/Cargo.toml
+
+# Rust tests (unit + integration)
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ## Architecture Overview
@@ -45,6 +48,7 @@ src-tauri/src/
 ├── cli/
 │   ├── mod.rs      # CliManager - subprocess lifecycle
 │   ├── events.rs   # CLI JSON event parsing
+│   ├── framer.rs   # Multi-line JSON framing of CLI stdout
 │   ├── network.rs  # Network error detection
 │   ├── discovery.rs # CLI binary discovery
 │   └── process.rs  # ProcessRunner trait (for testability)
@@ -66,6 +70,7 @@ src-tauri/src/
 - **cli/**: CLI subprocess management
   - **mod.rs**: `CliManager` - Spawns and monitors `filen --verbose sync`
   - **events.rs**: Parses JSON events (`cycleSuccess`, `deltasCount`, `transfer`, etc.)
+  - **framer.rs**: Accumulates the CLI's pretty-printed multi-line JSON into complete objects (string-literal-aware brace tracking, capped buffer)
   - **network.rs**: Detects network errors for offline state
   - **process.rs**: `ProcessRunner` trait for dependency injection (enables mocking)
 - **state.rs**: `AppState` with `tokio::sync::watch` channel for reactive UI updates. Includes state machine validation for `SyncState` transitions.
