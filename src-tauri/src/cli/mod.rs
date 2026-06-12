@@ -31,11 +31,13 @@
 
 mod discovery;
 mod events;
+pub mod framer;
 pub mod network;
 pub mod process;
 
 pub use discovery::find_filen_cli;
 pub use events::{CliErrorEvent, CliEvent};
+use framer::{Frame, JsonFramer};
 
 // Re-export process types for dependency injection (currently unused, for future testability)
 #[allow(unused_imports)]
@@ -46,6 +48,7 @@ use crate::error::CliError;
 use crate::state::{AppState, CurrentTransfer, StorageInfo, SyncState, TransferDirection};
 use network::is_network_error;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -90,6 +93,7 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             state.set_sync_state(SyncState::Synced).await;
             state.set_pending_count(0).await;
             state.set_current_transfer(None).await;
+            state.set_last_synced_now().await;
         }
         CliEvent::CycleError { error } => {
             let error_msg = error.as_deref().unwrap_or("");
@@ -216,6 +220,10 @@ pub struct CliManager {
     process: Arc<RwLock<Option<Child>>>,
     state: AppState,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
+    /// Set while the app itself is stopping the CLI (pause, logout, quit, restart).
+    /// The output monitors check this so an intentional kill is not reported as
+    /// an Error state — which would otherwise trigger the auto-restart loop.
+    stopping: Arc<AtomicBool>,
 }
 
 impl CliManager {
@@ -224,6 +232,7 @@ impl CliManager {
             process: Arc::new(RwLock::new(None)),
             state,
             shutdown_tx: Arc::new(RwLock::new(None)),
+            stopping: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -328,7 +337,10 @@ impl CliManager {
 
         // Don't pass credentials - CLI will use its stored session
         // Use --verbose to get detailed file sync information
-        let cli_info = find_filen_cli();
+        // Discovery walks the filesystem; keep it off the async runtime
+        let cli_info = tokio::task::spawn_blocking(find_filen_cli)
+            .await
+            .map_err(|e| CliError::Spawn(std::io::Error::other(e)))?;
         log::info!("Using filen CLI at: {}", cli_info.command);
         if let Some(ref path_env) = cli_info.path_env {
             log::info!("Setting PATH for CLI: {}", path_env);
@@ -343,10 +355,18 @@ impl CliManager {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        // Run the CLI in its own process group so we can terminate the whole
+        // tree (the CLI is a Node app that may spawn children)
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         // Set PATH if we found a specific installation (needed for node-based CLI)
         if let Some(ref path_env) = cli_info.path_env {
             cmd.env("PATH", path_env);
         }
+
+        // New process: future exits are real crashes until stop_sync says otherwise
+        self.stopping.store(false, Ordering::SeqCst);
 
         let mut child = cmd.spawn()?;
 
@@ -366,15 +386,14 @@ impl CliManager {
 
         // Spawn output monitoring task
         let state = self.state.clone();
+        let stopping = self.stopping.clone();
         tokio::spawn(async move {
             if let Some(stdout) = stdout {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
 
-                // Buffer for accumulating multi-line JSON objects
-                // CLI outputs pretty-printed JSON spanning multiple lines
-                let mut json_buffer = String::new();
-                let mut brace_depth = 0;
+                // Frames multi-line pretty-printed JSON objects from the CLI
+                let mut framer = JsonFramer::new();
 
                 loop {
                     // Check for shutdown signal (non-blocking)
@@ -388,64 +407,42 @@ impl CliManager {
                         Ok(Ok(Some(line))) => {
                             log::debug!("CLI stdout: {}", line);
 
-                            // Count braces to detect complete JSON objects
-                            for ch in line.chars() {
-                                match ch {
-                                    '{' => brace_depth += 1,
-                                    '}' => brace_depth -= 1,
-                                    _ => {}
-                                }
-                            }
-
-                            // Accumulate lines into buffer
-                            json_buffer.push_str(&line);
-                            json_buffer.push('\n');
-
-                            // When brace depth returns to 0, we have a complete JSON object
-                            if brace_depth == 0 && !json_buffer.trim().is_empty() {
-                                let complete_json = json_buffer.trim();
-
-                                // Try to parse as JSON event
-                                if complete_json.starts_with('{') {
-                                    match serde_json::from_str::<CliEvent>(complete_json) {
-                                        Ok(event) => {
-                                            handle_cli_event(&state, event).await;
-                                        }
-                                        Err(e) => {
-                                            log::debug!(
-                                                "Failed to parse JSON event: {} - {}",
-                                                e,
-                                                &complete_json[..complete_json.len().min(100)]
-                                            );
+                            for frame in framer.push_line(&line) {
+                                match frame {
+                                    Frame::Json(complete_json) => {
+                                        match serde_json::from_str::<CliEvent>(&complete_json) {
+                                            Ok(event) => {
+                                                handle_cli_event(&state, event).await;
+                                            }
+                                            Err(e) => {
+                                                log::debug!(
+                                                    "Failed to parse JSON event: {} - {}",
+                                                    e,
+                                                    &complete_json[..complete_json.len().min(100)]
+                                                );
+                                            }
                                         }
                                     }
-                                } else {
-                                    // Non-JSON text output
-                                    handle_text_output(&state, complete_json).await;
+                                    Frame::Text(text) => {
+                                        handle_text_output(&state, &text).await;
+                                    }
                                 }
-
-                                json_buffer.clear();
                             }
                         }
-                        Ok(Ok(None)) => {
-                            // EOF - process exited
-                            log::warn!("CLI process stdout closed");
+                        Ok(Ok(None)) | Ok(Err(_)) => {
+                            // EOF or read error - process exited
+                            if stopping.load(Ordering::SeqCst) {
+                                // We killed it on purpose (pause/logout/quit/restart);
+                                // don't report an error state
+                                log::info!("CLI process stopped intentionally");
+                                break;
+                            }
+                            log::warn!("CLI process stdout closed unexpectedly");
                             // Give stderr handler time to process network errors
                             // (stderr and stdout handlers run concurrently)
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             // Preserve Offline state if already set by stderr handler
                             // (network errors often cause CLI to crash)
-                            let current_state = state.get_sync_state().await;
-                            if current_state != SyncState::Offline {
-                                state.set_sync_state(SyncState::Error).await;
-                            }
-                            break;
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Error reading CLI stdout: {}", e);
-                            // Give stderr handler time to process network errors
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            // Preserve Offline state if already set by stderr handler
                             let current_state = state.get_sync_state().await;
                             if current_state != SyncState::Offline {
                                 state.set_sync_state(SyncState::Error).await;
@@ -462,6 +459,7 @@ impl CliManager {
 
         // Spawn stderr monitoring task
         let state_for_stderr = self.state.clone();
+        let stopping_for_stderr = self.stopping.clone();
         if let Some(stderr) = stderr {
             tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
@@ -472,6 +470,11 @@ impl CliManager {
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     log::warn!("CLI stderr: {}", line);
+
+                    // Ignore the noise a killed process flushes during intentional stop
+                    if stopping_for_stderr.load(Ordering::SeqCst) {
+                        continue;
+                    }
 
                     // Try to parse as JSON error event
                     if let Ok(err_event) = serde_json::from_str::<CliErrorEvent>(&line) {
@@ -507,6 +510,10 @@ impl CliManager {
 
     /// Stop the sync process
     pub async fn stop_sync(&self) {
+        // Mark this as an intentional stop BEFORE killing, so the output
+        // monitors don't interpret the process exit as a crash
+        self.stopping.store(true, Ordering::SeqCst);
+
         // Send shutdown signal
         if let Some(tx) = self.shutdown_tx.write().await.take() {
             let _ = tx.send(()).await;
@@ -515,9 +522,39 @@ impl CliManager {
         // Kill the process - only set Paused if there was actually a process running
         if let Some(mut child) = self.process.write().await.take() {
             log::info!("Stopping sync process");
-            let _ = child.kill().await;
+            Self::terminate_process_tree(&mut child).await;
             self.state.set_sync_state(SyncState::Paused).await;
         }
+    }
+
+    /// Terminate the CLI and any children it spawned.
+    ///
+    /// On Unix the CLI runs in its own process group (see `start_sync`), so we
+    /// first send SIGTERM to the group for a graceful shutdown, then escalate
+    /// to SIGKILL if it hasn't exited shortly after.
+    async fn terminate_process_tree(child: &mut Child) {
+        #[cfg(unix)]
+        {
+            if let Some(pid) = child.id() {
+                let pgid = pid as i32;
+                unsafe {
+                    libc::killpg(pgid, libc::SIGTERM);
+                }
+                // Give the CLI a moment to shut down cleanly
+                if timeout(Duration::from_secs(2), child.wait()).await.is_ok() {
+                    // Reap any stragglers in the group
+                    unsafe {
+                        libc::killpg(pgid, libc::SIGKILL);
+                    }
+                    return;
+                }
+                log::warn!("CLI did not exit after SIGTERM, sending SIGKILL");
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
+                }
+            }
+        }
+        let _ = child.kill().await;
     }
 
     /// Check if sync is running

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
@@ -51,15 +52,15 @@ impl SyncState {
     ///
     /// This defines the state machine transitions:
     /// ```text
-    /// Starting → Scanning, NotLoggedIn, CliNotFound
+    /// Starting → Scanning, Syncing, Synced, NotLoggedIn, CliNotFound
     /// NotLoggedIn → Scanning, Syncing
-    /// Scanning → Syncing, Synced, Error, Offline
-    /// Syncing → Synced, Scanning, Error, Offline
+    /// Scanning → Syncing, Synced, Error, Offline, Paused
+    /// Syncing → Synced, Scanning, Error, Offline, Paused
     /// Synced → Scanning, Syncing, NotLoggedIn, Paused
     /// Paused → Scanning, Syncing, NotLoggedIn
-    /// Error → Scanning, NotLoggedIn, CliNotFound
+    /// Error → Scanning, NotLoggedIn, CliNotFound, Paused
     /// CliNotFound → Starting (retry)
-    /// Offline → Scanning (retry when online)
+    /// Offline → Scanning, Syncing, Error, Paused (retry when online)
     /// ```
     pub fn valid_transitions(&self) -> &'static [SyncState] {
         match self {
@@ -73,19 +74,21 @@ impl SyncState {
             ],
             // Not logged in can start syncing after login
             SyncState::NotLoggedIn => &[SyncState::Scanning, SyncState::Syncing],
-            // Scanning can find deltas (syncing), complete (synced), or fail
+            // Scanning can find deltas (syncing), complete (synced), fail, or be paused
             SyncState::Scanning => &[
                 SyncState::Syncing,
                 SyncState::Synced,
                 SyncState::Error,
                 SyncState::Offline,
+                SyncState::Paused,
             ],
-            // Syncing can complete, scan again, or fail
+            // Syncing can complete, scan again, fail, or be paused
             SyncState::Syncing => &[
                 SyncState::Synced,
                 SyncState::Scanning,
                 SyncState::Error,
                 SyncState::Offline,
+                SyncState::Paused,
             ],
             // Synced can start new sync cycle, be paused, or logout
             SyncState::Synced => &[
@@ -100,16 +103,22 @@ impl SyncState {
                 SyncState::Syncing,
                 SyncState::NotLoggedIn,
             ],
-            // Error can retry or logout
+            // Error can retry, be paused, or logout
             SyncState::Error => &[
                 SyncState::Scanning,
                 SyncState::NotLoggedIn,
                 SyncState::CliNotFound,
+                SyncState::Paused,
             ],
             // CLI not found can retry (goes back to starting to recheck)
             SyncState::CliNotFound => &[SyncState::Starting, SyncState::NotLoggedIn],
-            // Offline can retry when online (scan for changes)
-            SyncState::Offline => &[SyncState::Scanning, SyncState::Syncing, SyncState::Error],
+            // Offline can retry when online (scan for changes) or be paused
+            SyncState::Offline => &[
+                SyncState::Scanning,
+                SyncState::Syncing,
+                SyncState::Error,
+                SyncState::Paused,
+            ],
         }
     }
 
@@ -262,6 +271,8 @@ pub struct StateSnapshot {
     pub sync_state: SyncState,
     pub pending_count: u32,
     pub current_transfer: Option<CurrentTransfer>,
+    /// When the last sync cycle completed successfully
+    pub last_synced: Option<DateTime<Local>>,
 }
 
 impl Default for StateSnapshot {
@@ -270,6 +281,7 @@ impl Default for StateSnapshot {
             sync_state: SyncState::Starting,
             pending_count: 0,
             current_transfer: None,
+            last_synced: None,
         }
     }
 }
@@ -289,6 +301,7 @@ struct AppStateInner {
     is_logged_in: bool,
     pending_count: u32,
     current_transfer: Option<CurrentTransfer>,
+    last_synced: Option<DateTime<Local>>,
 }
 
 impl AppState {
@@ -301,6 +314,7 @@ impl AppState {
                 is_logged_in: false,
                 pending_count: 0,
                 current_transfer: None,
+                last_synced: None,
             })),
             notify_tx: Arc::new(notify_tx),
         }
@@ -321,6 +335,7 @@ impl AppState {
             sync_state: inner.sync_state,
             pending_count: inner.pending_count,
             current_transfer: inner.current_transfer.clone(),
+            last_synced: inner.last_synced,
         };
         // Ignore send errors (no receivers)
         let _ = self.notify_tx.send(snapshot);
@@ -352,7 +367,10 @@ impl AppState {
     ///
     /// Same-state transitions are always allowed (no-op).
     #[allow(dead_code)]
-    pub async fn transition_to(&self, new_state: SyncState) -> Result<SyncState, InvalidTransition> {
+    pub async fn transition_to(
+        &self,
+        new_state: SyncState,
+    ) -> Result<SyncState, InvalidTransition> {
         let mut inner = self.inner.write().await;
         let current = inner.sync_state;
 
@@ -445,6 +463,18 @@ impl AppState {
         let mut inner = self.inner.write().await;
         inner.current_transfer = transfer;
         self.notify(&inner);
+    }
+
+    /// Record that a sync cycle just completed successfully
+    pub async fn set_last_synced_now(&self) {
+        let mut inner = self.inner.write().await;
+        inner.last_synced = Some(Local::now());
+        self.notify(&inner);
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_last_synced(&self) -> Option<DateTime<Local>> {
+        self.inner.read().await.last_synced
     }
 
     /// Update progress of the current transfer (bytes transferred)
@@ -842,9 +872,7 @@ mod tests {
     async fn test_transition_to_unchecked_allows_invalid() {
         let state = AppState::new();
         // Invalid transition but should still work (with warning logged)
-        state
-            .transition_to_unchecked(SyncState::Paused)
-            .await;
+        state.transition_to_unchecked(SyncState::Paused).await;
         assert_eq!(state.get_sync_state().await, SyncState::Paused);
     }
 
@@ -895,11 +923,7 @@ mod tests {
         state.set_sync_state(SyncState::Starting).await;
 
         // Should NOT be notified (use timeout to verify)
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            rx.changed(),
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_millis(50), rx.changed()).await;
 
         // Should timeout because no notification was sent
         assert!(result.is_err());

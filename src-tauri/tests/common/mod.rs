@@ -20,7 +20,10 @@ impl TestEnvironment {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let app_state = AppState::new();
 
-        Self { temp_dir, app_state }
+        Self {
+            temp_dir,
+            app_state,
+        }
     }
 
     /// Get a path within the temporary directory
@@ -36,11 +39,7 @@ impl Default for TestEnvironment {
 }
 
 /// Wait for state to change with timeout
-pub async fn wait_for_state(
-    app_state: &AppState,
-    expected: SyncState,
-    timeout_ms: u64,
-) -> bool {
+pub async fn wait_for_state(app_state: &AppState, expected: SyncState, timeout_ms: u64) -> bool {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_millis(timeout_ms);
 

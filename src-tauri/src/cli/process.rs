@@ -289,7 +289,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tokio_runner_default() {
-        let runner = TokioProcessRunner::default();
+        let runner = TokioProcessRunner;
         // Just verify it can be constructed
         let _ = runner;
     }
@@ -343,9 +343,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_handle_stderr_lines() {
         let runner = mock::MockProcessRunner::new(true);
-        runner
-            .add_stderr_lines(vec!["error1".to_string()])
-            .await;
+        runner.add_stderr_lines(vec!["error1".to_string()]).await;
 
         let mut handle = runner.spawn("test", &[], None).await.unwrap();
 

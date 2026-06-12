@@ -55,6 +55,33 @@ pub async fn login(ctx: &ActionContext<'_>) {
         }
     } else {
         log::info!("No Filen CLI session found. Please run 'filen' first to authenticate.");
+        // Tell the user what to do instead of failing silently
+        ctx.app_handle
+            .dialog()
+            .message(rust_i18n::t!("dialog.login_help_message"))
+            .title(rust_i18n::t!("dialog.login_help_title"))
+            .kind(MessageDialogKind::Info)
+            .blocking_show();
+    }
+}
+
+/// Handle pause/resume action - pause syncing when active, resume when paused
+pub async fn toggle_pause(ctx: &ActionContext<'_>) {
+    let current = ctx.app_state.get_sync_state().await;
+    if current == SyncState::Paused {
+        log::info!("Resume requested");
+        ctx.app_state.set_sync_state(SyncState::Scanning).await;
+        if let Err(e) = ctx.cli_manager.start_sync(ctx.config).await {
+            log::error!("Failed to resume sync: {}", e);
+            ctx.app_state.set_sync_state(SyncState::Error).await;
+        }
+    } else {
+        log::info!("Pause requested");
+        ctx.cli_manager.stop_sync().await;
+        // stop_sync only sets Paused when a process was running; ensure the
+        // user's intent is reflected even if the CLI had already died
+        // (e.g. pausing while in Error or Offline state stops the auto-retry)
+        ctx.app_state.set_sync_state(SyncState::Paused).await;
     }
 }
 
@@ -81,7 +108,8 @@ pub async fn logout(ctx: &ActionContext<'_>) {
         ctx.app_state.set_logged_in(false).await;
         ctx.app_state.set_sync_state(SyncState::NotLoggedIn).await;
         ctx.tray.set_login_state(Some(false));
-        ctx.tray.update_status(&SyncState::NotLoggedIn.status_text());
+        ctx.tray
+            .update_status(&SyncState::NotLoggedIn.status_text());
     } else {
         log::info!("Logout cancelled");
     }

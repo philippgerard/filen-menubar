@@ -19,11 +19,7 @@ fn test_parse_real_cli_cycle_events() {
 
     for event_str in events {
         let result: Result<CliEvent, _> = serde_json::from_str(event_str);
-        assert!(
-            result.is_ok(),
-            "Failed to parse event: {}",
-            event_str
-        );
+        assert!(result.is_ok(), "Failed to parse event: {}", event_str);
     }
 }
 
@@ -111,11 +107,7 @@ fn test_network_error_detection() {
     }
 
     // Non-network errors
-    let other_errors = vec![
-        "File not found",
-        "Permission denied",
-        "Invalid credentials",
-    ];
+    let other_errors = vec!["File not found", "Permission denied", "Invalid credentials"];
 
     for error in other_errors {
         assert!(

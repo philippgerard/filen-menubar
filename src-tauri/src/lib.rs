@@ -59,6 +59,7 @@ async fn handle_tray_action(
         TrayAction::OpenWebUI => actions::open_web_ui(),
         TrayAction::Login => actions::login(&ctx).await,
         TrayAction::Logout => actions::logout(&ctx).await,
+        TrayAction::TogglePause => actions::toggle_pause(&ctx).await,
         TrayAction::Settings => actions::open_settings(),
         TrayAction::ShowLogs => actions::show_logs(),
         TrayAction::About => actions::show_about(app_handle),
@@ -66,12 +67,32 @@ async fn handle_tray_action(
     }
 }
 
+/// Format the last-synced timestamp for menu display
+fn format_last_synced(snapshot: &StateSnapshot) -> Option<String> {
+    snapshot
+        .last_synced
+        .map(|dt| dt.format("%H:%M").to_string())
+}
+
 /// Apply a state snapshot to the tray UI
-fn apply_state_to_tray(tray: &Arc<dyn TrayInterface>, snapshot: &StateSnapshot, animation_frame: u8) {
+fn apply_state_to_tray(
+    tray: &Arc<dyn TrayInterface>,
+    snapshot: &StateSnapshot,
+    animation_frame: u8,
+) {
     tray.update_status(&snapshot.sync_state.status_text());
+    tray.update_last_synced(format_last_synced(snapshot).as_deref());
     tray.update_icon(snapshot.sync_state, animation_frame);
     tray.update_pending_count(snapshot.pending_count);
     tray.update_current_transfer(snapshot.current_transfer.as_ref());
+}
+
+/// States whose tray icon is animated; only these need per-frame icon updates
+fn is_animated_state(state: SyncState) -> bool {
+    matches!(
+        state,
+        SyncState::Starting | SyncState::Scanning | SyncState::Syncing
+    )
 }
 
 /// Start the status update loop
@@ -88,21 +109,21 @@ async fn status_update_loop(
     config: Config,
 ) {
     log::info!("Status update loop started");
-    
+
     // Subscribe to state changes
     let mut state_rx = app_state.subscribe();
-    
+
     // Animation timer (500ms for smooth icon pulsing)
     let mut animation_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
     let mut animation_frame = 0u8;
     let mut offline_ticks = 0u32;
-    
+
     // Error restart state with exponential backoff
     // Delays: 5s, 10s, 20s, 40s, 60s (capped)
     let mut error_ticks = 0u32;
     let mut error_restart_delay_secs = 5u32;
     const MAX_ERROR_RESTART_DELAY_SECS: u32 = 60;
-    
+
     // Track current state for animation updates
     let mut current_snapshot = StateSnapshot::default();
 
@@ -115,33 +136,37 @@ async fn status_update_loop(
                     log::error!("State watch channel closed");
                     break;
                 }
-                
+
                 current_snapshot = state_rx.borrow().clone();
                 log::debug!("Reactive state update: {:?}", current_snapshot.sync_state);
                 apply_state_to_tray(&tray, &current_snapshot, animation_frame);
-                
+
                 // Reset counters on state change
                 if current_snapshot.sync_state != SyncState::Offline {
                     offline_ticks = 0;
                 }
                 if current_snapshot.sync_state != SyncState::Error {
                     error_ticks = 0;
-                    // Reset backoff on successful state transition (not just leaving error)
-                    if current_snapshot.sync_state == SyncState::Synced 
-                        || current_snapshot.sync_state == SyncState::Syncing 
-                    {
+                    // Reset backoff only once a sync cycle actually completes.
+                    // (Syncing is not enough: a crash-looping CLI can briefly
+                    // reach Syncing each round, which would defeat the backoff.)
+                    if current_snapshot.sync_state == SyncState::Synced {
                         error_restart_delay_secs = 5;
                     }
                 }
             }
-            
+
             // Animation timer for icon pulsing and auto-retry
             _ = animation_interval.tick() => {
                 animation_frame = (animation_frame + 1) % 4;
-                
-                // Update icon animation frame
-                tray.update_icon(current_snapshot.sync_state, animation_frame);
-                
+
+                // Update icon animation frame - only animated states need
+                // per-frame updates; idle states would just spam the tray
+                // (on Linux every update is a D-Bus round trip)
+                if is_animated_state(current_snapshot.sync_state) {
+                    tray.update_icon(current_snapshot.sync_state, animation_frame);
+                }
+
                 // Auto-retry when offline: attempt to reconnect every ~30 seconds
                 // (60 ticks at 500ms intervals = 30 seconds)
                 if current_snapshot.sync_state == SyncState::Offline {
@@ -155,7 +180,7 @@ async fn status_update_loop(
                         }
                     }
                 }
-                
+
                 // Auto-restart on error: restart CLI with exponential backoff
                 // This handles CLI crashes (e.g., RangeError in Node.js)
                 if current_snapshot.sync_state == SyncState::Error {
@@ -168,15 +193,17 @@ async fn status_update_loop(
                             "Attempting to restart sync after CLI error (delay was {}s)...",
                             error_restart_delay_secs
                         );
+                        // Increase backoff for the NEXT attempt regardless of
+                        // whether the spawn succeeds: a CLI that starts fine
+                        // but crashes moments later must also back off,
+                        // otherwise it restarts at the minimum delay forever.
+                        // Reset happens when a sync cycle completes (Synced).
+                        error_restart_delay_secs =
+                            (error_restart_delay_secs * 2).min(MAX_ERROR_RESTART_DELAY_SECS);
                         app_state.set_sync_state(SyncState::Scanning).await;
                         if let Err(e) = cli_manager.start_sync(&config).await {
                             log::warn!("Restart attempt failed: {}", e);
-                            // Increase backoff for next attempt (exponential with cap)
-                            error_restart_delay_secs = 
-                                (error_restart_delay_secs * 2).min(MAX_ERROR_RESTART_DELAY_SECS);
                         }
-                        // Note: If start_sync succeeds but CLI crashes again,
-                        // we'll enter Error state again and the backoff continues
                     }
                 }
             }
@@ -230,7 +257,6 @@ pub fn run() {
     let cli_manager_clone = cli_manager.clone();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             // Create the tray icon

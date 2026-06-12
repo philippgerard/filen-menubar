@@ -1,8 +1,10 @@
 //! macOS tray implementation using Tauri's TrayIcon
 
-use super::{get_pending_text, TrayAction, TrayInterface};
+use super::{
+    get_pending_text, pause_resume_enabled, pause_resume_label, TrayAction, TrayInterface,
+};
 use crate::state::{CurrentTransfer, SyncState};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder},
@@ -19,34 +21,57 @@ const ICON_SYNCING_1: &[u8] = include_bytes!("../../icons/tray/syncing-1@2x.png"
 const ICON_SYNCING_2: &[u8] = include_bytes!("../../icons/tray/syncing-2@2x.png");
 const ICON_SYNCING_3: &[u8] = include_bytes!("../../icons/tray/syncing-3@2x.png");
 
+/// Decoded RGBA pixels for one icon
+struct DecodedIcon {
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// All tray icons decoded once at first use. The animation timer requests an
+/// icon every 500ms while syncing; decoding the PNGs each time is wasted work.
+static DECODED_ICONS: OnceLock<[Option<DecodedIcon>; 6]> = OnceLock::new();
+
 /// Decode a PNG from bytes into RGBA data.
 /// Since we use template mode, macOS will automatically handle dark/light mode.
 /// The source PNGs should have black shapes on transparent background.
-fn decode_png(png_data: &[u8]) -> Option<Image<'static>> {
+fn decode_png(png_data: &[u8]) -> Option<DecodedIcon> {
     let img = image::load_from_memory(png_data).ok()?;
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    Some(Image::new_owned(rgba.into_raw(), width, height))
+    Some(DecodedIcon {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
+}
+
+fn decoded_icons() -> &'static [Option<DecodedIcon>; 6] {
+    DECODED_ICONS.get_or_init(|| {
+        [
+            decode_png(ICON_IDLE),
+            decode_png(ICON_ERROR),
+            decode_png(ICON_SYNCING_0),
+            decode_png(ICON_SYNCING_1),
+            decode_png(ICON_SYNCING_2),
+            decode_png(ICON_SYNCING_3),
+        ]
+    })
 }
 
 /// Get the appropriate icon for the given sync state and animation frame
 fn get_icon_for_state(state: SyncState, animation_frame: u8) -> Option<Image<'static>> {
-    let png_data = match state {
-        SyncState::Synced | SyncState::Paused | SyncState::NotLoggedIn | SyncState::Offline => {
-            ICON_IDLE
-        }
-        SyncState::Error | SyncState::CliNotFound => ICON_ERROR,
+    let index = match state {
+        SyncState::Synced | SyncState::Paused | SyncState::NotLoggedIn | SyncState::Offline => 0,
+        SyncState::Error | SyncState::CliNotFound => 1,
         SyncState::Starting | SyncState::Scanning | SyncState::Syncing => {
             // Cycle through 4 frames for pulsing animation
-            match animation_frame % 4 {
-                0 => ICON_SYNCING_0,
-                1 => ICON_SYNCING_1,
-                2 => ICON_SYNCING_2,
-                _ => ICON_SYNCING_3,
-            }
+            2 + (animation_frame % 4) as usize
         }
     };
-    decode_png(png_data)
+    decoded_icons()[index]
+        .as_ref()
+        .map(|icon| Image::new_owned(icon.rgba.clone(), icon.width, icon.height))
 }
 
 /// Shared state for menu updates
@@ -60,6 +85,8 @@ struct MenuState {
     animation_frame: u8,
     /// Current transfer display text (None = hidden)
     current_transfer_text: Option<String>,
+    /// Pre-formatted time of the last successful sync (None = unknown)
+    last_synced_text: Option<String>,
 }
 
 /// Stored menu item references for in-place updates
@@ -67,6 +94,7 @@ struct MenuItems {
     status_item: MenuItem<tauri::Wry>,
     pending_item: MenuItem<tauri::Wry>,
     transfer_item: MenuItem<tauri::Wry>,
+    pause_item: MenuItem<tauri::Wry>,
 }
 
 pub struct MacOsTray {
@@ -91,6 +119,7 @@ impl MacOsTray {
             state.animation_frame,
             state.login_state,
             state.current_transfer_text.as_deref(),
+            state.last_synced_text.as_deref(),
         ) {
             let _ = self.tray.set_menu(Some(menu));
             *self.menu_items.write().unwrap() = items;
@@ -113,6 +142,7 @@ impl TrayInterface for MacOsTray {
             }
 
             // Determine if we need to update the menu text
+            // (state changes also update the pause/resume item label)
             let needs_menu = state_changed
                 || (frame_changed
                     && (state == SyncState::Scanning || state == SyncState::Starting));
@@ -135,11 +165,17 @@ impl TrayInterface for MacOsTray {
                 state_read.sync_state,
                 state_read.pending_count,
                 animation_frame,
+                state_read.last_synced_text.as_deref(),
             );
+            let pause_label = pause_resume_label(state_read.sync_state);
+            let pause_enabled = pause_resume_enabled(state_read.sync_state, state_read.login_state);
             drop(state_read);
 
             let items = self.menu_items.read().unwrap();
             let _ = items.pending_item.set_text(&pending_text);
+            // Keep the pause/resume item in sync with the state
+            let _ = items.pause_item.set_text(&pause_label);
+            let _ = items.pause_item.set_enabled(pause_enabled);
         }
 
         if needs_icon_update {
@@ -207,7 +243,12 @@ impl TrayInterface for MacOsTray {
         let _ = self.tray.set_tooltip(Some(&tooltip));
 
         // Update menu item text in-place (doesn't close menu)
-        let pending_text = get_pending_text(state.sync_state, count, state.animation_frame);
+        let pending_text = get_pending_text(
+            state.sync_state,
+            count,
+            state.animation_frame,
+            state.last_synced_text.as_deref(),
+        );
         drop(state);
         let items = self.menu_items.read().unwrap();
         let _ = items.pending_item.set_text(&pending_text);
@@ -256,9 +297,34 @@ impl TrayInterface for MacOsTray {
             let _ = items.transfer_item.set_text(&text);
         }
     }
+
+    fn update_last_synced(&self, time_text: Option<&str>) {
+        let new_text = time_text.map(|t| t.to_string());
+        {
+            let mut state = self.state.write().unwrap();
+            if state.last_synced_text != new_text {
+                state.last_synced_text = new_text;
+            } else {
+                return; // No change
+            }
+        }
+
+        // The time is shown in the pending line while synced; refresh it
+        let state = self.state.read().unwrap();
+        let pending_text = get_pending_text(
+            state.sync_state,
+            state.pending_count,
+            state.animation_frame,
+            state.last_synced_text.as_deref(),
+        );
+        drop(state);
+        let items = self.menu_items.read().unwrap();
+        let _ = items.pending_item.set_text(&pending_text);
+    }
 }
 
 /// Build the tray menu with current state
+#[allow(clippy::too_many_arguments)]
 fn build_menu(
     app: &AppHandle,
     status_text: &str,
@@ -267,6 +333,7 @@ fn build_menu(
     animation_frame: u8,
     login_state: Option<bool>,
     current_transfer_text: Option<&str>,
+    last_synced_text: Option<&str>,
 ) -> Result<(Menu<tauri::Wry>, MenuItems), Box<dyn std::error::Error>> {
     let mut builder = MenuBuilder::new(app);
 
@@ -278,7 +345,8 @@ fn build_menu(
     builder = builder.item(&status_item);
 
     // Pending file count (always present)
-    let pending_text = get_pending_text(sync_state, pending_count, animation_frame);
+    let pending_text =
+        get_pending_text(sync_state, pending_count, animation_frame, last_synced_text);
     let pending_item = MenuItemBuilder::with_id("pending_count", &pending_text)
         .enabled(false)
         .build(app)?;
@@ -309,6 +377,12 @@ fn build_menu(
     builder = builder.item(&open_web_ui);
 
     builder = builder.separator();
+
+    // Pause/Resume syncing
+    let pause_item = MenuItemBuilder::with_id("pause_resume", pause_resume_label(sync_state))
+        .enabled(pause_resume_enabled(sync_state, login_state))
+        .build(app)?;
+    builder = builder.item(&pause_item);
 
     // Login or Logout based on state (hidden when None/starting)
     match login_state {
@@ -353,6 +427,7 @@ fn build_menu(
         status_item,
         pending_item,
         transfer_item,
+        pause_item,
     };
 
     Ok((builder.build()?, items))
@@ -371,6 +446,7 @@ pub fn create_tray(
         pending_count: 0,
         animation_frame: 0,
         current_transfer_text: None,
+        last_synced_text: None,
     };
 
     // Build initial menu
@@ -382,6 +458,7 @@ pub fn create_tray(
         initial_state.animation_frame,
         initial_state.login_state,
         initial_state.current_transfer_text.as_deref(),
+        initial_state.last_synced_text.as_deref(),
     )?;
 
     // Create tray icon with our custom monochrome icon
@@ -409,6 +486,7 @@ pub fn create_tray(
             "open_web_ui" => Some(TrayAction::OpenWebUI),
             "login" => Some(TrayAction::Login),
             "logout" => Some(TrayAction::Logout),
+            "pause_resume" => Some(TrayAction::TogglePause),
             "settings" => Some(TrayAction::Settings),
             "show_logs" => Some(TrayAction::ShowLogs),
             "about" => Some(TrayAction::About),
