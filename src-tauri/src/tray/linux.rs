@@ -5,74 +5,8 @@ use super::{
 };
 use crate::state::{CurrentTransfer, SyncState};
 use ksni::{Tray, TrayMethods};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-
-// Embed tray icons at compile time (1x and 2x for normal and HiDPI panels).
-// These are the same template icons used on macOS: black shapes on a
-// transparent background, recolored to white at load time for dark panels.
-const ICON_IDLE: &[u8] = include_bytes!("../../icons/tray/idle.png");
-const ICON_IDLE_2X: &[u8] = include_bytes!("../../icons/tray/idle@2x.png");
-const ICON_ERROR: &[u8] = include_bytes!("../../icons/tray/error.png");
-const ICON_ERROR_2X: &[u8] = include_bytes!("../../icons/tray/error@2x.png");
-const ICON_SYNCING: [(&[u8], &[u8]); 4] = [
-    (
-        include_bytes!("../../icons/tray/syncing-0.png"),
-        include_bytes!("../../icons/tray/syncing-0@2x.png"),
-    ),
-    (
-        include_bytes!("../../icons/tray/syncing-1.png"),
-        include_bytes!("../../icons/tray/syncing-1@2x.png"),
-    ),
-    (
-        include_bytes!("../../icons/tray/syncing-2.png"),
-        include_bytes!("../../icons/tray/syncing-2@2x.png"),
-    ),
-    (
-        include_bytes!("../../icons/tray/syncing-3.png"),
-        include_bytes!("../../icons/tray/syncing-3@2x.png"),
-    ),
-];
-
-/// Decoded ARGB pixmaps for every tray state, built once on first use
-struct StatePixmaps {
-    idle: Vec<ksni::Icon>,
-    error: Vec<ksni::Icon>,
-    syncing: [Vec<ksni::Icon>; 4],
-}
-
-static PIXMAPS: OnceLock<StatePixmaps> = OnceLock::new();
-
-/// Decode a template PNG (black on transparent) into an SNI ARGB32 icon,
-/// recolored to white so it is visible on the (typically dark) panel.
-fn decode_argb_white(png_data: &[u8]) -> Option<ksni::Icon> {
-    let img = image::load_from_memory(png_data).ok()?;
-    let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    let mut data = Vec::with_capacity((width * height * 4) as usize);
-    for px in rgba.pixels() {
-        let alpha = px.0[3];
-        // ARGB32 in network byte order; shape lives in the alpha channel
-        data.extend_from_slice(&[alpha, 0xFF, 0xFF, 0xFF]);
-    }
-    Some(ksni::Icon {
-        width: width as i32,
-        height: height as i32,
-        data,
-    })
-}
-
-fn decode_set(pngs: &[&[u8]]) -> Vec<ksni::Icon> {
-    pngs.iter().filter_map(|p| decode_argb_white(p)).collect()
-}
-
-fn pixmaps() -> &'static StatePixmaps {
-    PIXMAPS.get_or_init(|| StatePixmaps {
-        idle: decode_set(&[ICON_IDLE, ICON_IDLE_2X]),
-        error: decode_set(&[ICON_ERROR, ICON_ERROR_2X]),
-        syncing: ICON_SYNCING.map(|(one_x, two_x)| decode_set(&[one_x, two_x])),
-    })
-}
 
 /// Shared state for the Linux tray
 struct LinuxTrayState {
@@ -111,18 +45,16 @@ impl LinuxTray {
 impl TrayInterface for LinuxTray {
     fn update_icon(&self, state: SyncState, animation_frame: u8) {
         // Every trigger_update() is a D-Bus round trip, so only fire one when
-        // something visible changed: the state itself, or the animation frame
-        // while in an animated state.
+        // something visible changed. The theme icon ignores the animation
+        // frame; on Linux the frame only drives the animated dots in the
+        // menu's pending line, which appear during Scanning/Starting.
         let changed = if let Ok(mut s) = self.state.write() {
             let state_changed = s.sync_state != state;
             let frame_changed = s.animation_frame != animation_frame;
             s.sync_state = state;
             s.animation_frame = animation_frame;
-            let animating = matches!(
-                state,
-                SyncState::Starting | SyncState::Scanning | SyncState::Syncing
-            );
-            state_changed || (animating && frame_changed)
+            let dots_animating = matches!(state, SyncState::Starting | SyncState::Scanning);
+            state_changed || (dots_animating && frame_changed)
         } else {
             false
         };
@@ -225,31 +157,12 @@ struct FilenTray {
 
 impl Tray for FilenTray {
     fn icon_name(&self) -> String {
-        // We ship our own pixmaps (see icon_pixmap); leave the name empty so
-        // hosts use them. Fall back to theme icons if decoding ever failed.
-        if !pixmaps().idle.is_empty() {
-            return String::new();
-        }
+        // Freedesktop theme icon names: these follow the user's icon theme
+        // (color, style, light/dark panel) which custom pixmaps cannot do
         let state = self.state.read().map(|s| s.sync_state).unwrap_or_default();
         match state {
             SyncState::Error | SyncState::CliNotFound => "dialog-error".to_string(),
             _ => "folder-sync".to_string(),
-        }
-    }
-
-    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        let (state, frame) = self
-            .state
-            .read()
-            .map(|s| (s.sync_state, s.animation_frame))
-            .unwrap_or((SyncState::Starting, 0));
-        let p = pixmaps();
-        match state {
-            SyncState::Error | SyncState::CliNotFound => p.error.clone(),
-            SyncState::Starting | SyncState::Scanning | SyncState::Syncing => {
-                p.syncing[(frame % 4) as usize].clone()
-            }
-            _ => p.idle.clone(),
         }
     }
 
