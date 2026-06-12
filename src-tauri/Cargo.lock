@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "filen-menubar"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "async-trait",
  "chrono",
