@@ -7,7 +7,9 @@ use std::str::FromStr;
 /// Synchronization mode for the Filen CLI
 ///
 /// Determines how files are synced between local and cloud storage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Serialized in the CLI's camelCase convention (e.g. "twoWay").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SyncMode {
     /// Two-way sync: changes in either direction are synced
     #[default]
@@ -56,29 +58,12 @@ impl FromStr for SyncMode {
     }
 }
 
-impl Serialize for SyncMode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for SyncMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        SyncMode::from_str(&s).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Log level for the application
 ///
 /// Controls the verbosity of log output when logging is enabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Serialized lowercase (e.g. "debug").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     /// Most verbose: all messages including trace-level debugging
     Trace,
@@ -135,25 +120,6 @@ impl FromStr for LogLevel {
             "error" => Ok(LogLevel::Error),
             other => Err(ConfigError::InvalidLogLevel(other.to_string())),
         }
-    }
-}
-
-impl Serialize for LogLevel {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for LogLevel {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        LogLevel::from_str(&s).map_err(serde::de::Error::custom)
     }
 }
 

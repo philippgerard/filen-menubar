@@ -15,7 +15,7 @@ use config::Config;
 use credentials::CredentialManager;
 use state::{AppState, StateSnapshot, SyncState};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tray::{TrayAction, TrayInterface};
 
 // Initialize i18n with locale files
@@ -95,6 +95,14 @@ fn is_animated_state(state: SyncState) -> bool {
     )
 }
 
+/// States in which the 500ms timer must run: animated icons plus the
+/// offline-retry and error-backoff counters. In all other states the status
+/// loop blocks solely on the watch channel, so the app is fully quiescent
+/// at rest.
+fn needs_timer_tick(state: SyncState) -> bool {
+    is_animated_state(state) || state == SyncState::Offline || state == SyncState::Error
+}
+
 /// Start the status update loop
 ///
 /// This uses a hybrid approach:
@@ -104,17 +112,20 @@ fn is_animated_state(state: SyncState) -> bool {
 /// - Auto-restart logic for error state with exponential backoff
 async fn status_update_loop(
     app_state: AppState,
+    // Subscribed by the caller BEFORE this task is spawned, so state changes
+    // notified during startup cannot be missed
+    mut state_rx: watch::Receiver<StateSnapshot>,
     tray: Arc<dyn TrayInterface>,
     cli_manager: Arc<CliManager>,
     config: Config,
 ) {
     log::info!("Status update loop started");
 
-    // Subscribe to state changes
-    let mut state_rx = app_state.subscribe();
-
     // Animation timer (500ms for smooth icon pulsing)
     let mut animation_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+    // The timer is gated off while idle; don't fire a burst of catch-up
+    // ticks when it is re-enabled after a long pause
+    animation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut animation_frame = 0u8;
     let mut offline_ticks = 0u32;
 
@@ -156,8 +167,9 @@ async fn status_update_loop(
                 }
             }
 
-            // Animation timer for icon pulsing and auto-retry
-            _ = animation_interval.tick() => {
+            // Animation timer for icon pulsing and auto-retry; disabled
+            // entirely while idle (Synced/Paused/NotLoggedIn/CliNotFound)
+            _ = animation_interval.tick(), if needs_timer_tick(current_snapshot.sync_state) => {
                 animation_frame = (animation_frame + 1) % 4;
 
                 // Update icon animation frame - only animated states need
@@ -246,6 +258,10 @@ pub fn run() {
 
     // Create app state
     let app_state = AppState::new();
+    // Subscribe immediately, before any task can change state: a watch
+    // receiver only sees changes made after subscription, so subscribing
+    // inside the (later-spawned) status loop could miss startup transitions
+    let state_rx = app_state.subscribe();
     let cli_manager = Arc::new(CliManager::new(app_state.clone()));
 
     // Create action channel
@@ -304,6 +320,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 status_update_loop(
                     app_state_for_status,
+                    state_rx,
                     tray_for_status,
                     cli_manager_for_status,
                     config_for_status,
@@ -337,7 +354,7 @@ pub fn run() {
                         return (SyncState::CliNotFound, None);
                     }
 
-                    // Check for stored CLI session (sync operation, run in blocking context)
+                    // Check for stored CLI session (a few quick file stats)
                     log::info!("Checking credentials...");
                     let credentials_exist = CredentialManager::exists();
                     log::info!("Credentials exist: {}", credentials_exist);

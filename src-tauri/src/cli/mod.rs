@@ -55,15 +55,6 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
 
-/// Messages sent from CLI process monitor
-#[allow(dead_code)]
-#[derive(Debug)]
-pub enum CliMessage {
-    StateChanged(SyncState),
-    StorageUpdated(StorageInfo),
-    Error(String),
-}
-
 /// Handle a parsed CLI event and update app state accordingly
 async fn handle_cli_event(state: &AppState, event: CliEvent) {
     match event {
@@ -508,7 +499,12 @@ impl CliManager {
         Ok(())
     }
 
-    /// Stop the sync process
+    /// Stop the sync process.
+    ///
+    /// Deliberately does NOT change the sync state: callers know the intent
+    /// (pause sets Paused, logout sets NotLoggedIn, restart sets Scanning).
+    /// Setting Paused here used to cause a visible flicker when start_sync
+    /// stopped a crashed process during restart cleanup.
     pub async fn stop_sync(&self) {
         // Mark this as an intentional stop BEFORE killing, so the output
         // monitors don't interpret the process exit as a crash
@@ -519,11 +515,10 @@ impl CliManager {
             let _ = tx.send(()).await;
         }
 
-        // Kill the process - only set Paused if there was actually a process running
+        // Kill the process
         if let Some(mut child) = self.process.write().await.take() {
             log::info!("Stopping sync process");
             Self::terminate_process_tree(&mut child).await;
-            self.state.set_sync_state(SyncState::Paused).await;
         }
     }
 
@@ -571,40 +566,5 @@ impl CliManager {
         // The Filen CLI doesn't currently expose a storage quota command
         // Return default values for now
         Ok(StorageInfo::default())
-    }
-
-    /// Trigger a manual sync (one-shot, uses CLI's stored session)
-    #[allow(dead_code)]
-    pub async fn sync_once(&self, config: &Config) -> Result<(), CliError> {
-        // Generate syncPairs.json with ignore patterns
-        let sync_pairs_path = config.write_sync_pairs().map_err(|e| {
-            log::error!("Failed to write sync pairs: {}", e);
-            CliError::SyncPairs(e.to_string())
-        })?;
-
-        log::info!("Running one-shot sync with config: {:?}", sync_pairs_path);
-        self.state.set_sync_state(SyncState::Syncing).await;
-
-        let cli_info = find_filen_cli();
-        let mut cmd = Command::new(&cli_info.command);
-        cmd.arg("sync").arg(&sync_pairs_path);
-
-        // Set PATH if we found a specific installation (needed for node-based CLI)
-        if let Some(ref path_env) = cli_info.path_env {
-            cmd.env("PATH", path_env);
-        }
-
-        let output = cmd.output().await?;
-
-        if output.status.success() {
-            log::info!("One-shot sync completed successfully");
-            self.state.set_sync_state(SyncState::Synced).await;
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("One-shot sync failed: {}", stderr);
-            self.state.set_sync_state(SyncState::Error).await;
-        }
-
-        Ok(())
     }
 }

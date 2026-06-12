@@ -41,63 +41,19 @@ fn get_log_file_path(log_dir: &Path) -> PathBuf {
     log_dir.join("filen.log")
 }
 
-/// Initialize logging
-///
-/// When `logging_enabled` is true, logs to both file and console.
-/// When false, logs only to console (no file created).
-///
-/// Returns the path to the log file on success (or placeholder if disabled).
-pub fn init_logging(
-    logging_enabled: bool,
-    log_level: Option<LogLevel>,
-) -> Result<PathBuf, fern::InitError> {
-    // If logging is disabled, only log to console
-    if !logging_enabled {
-        return init_console_only(log_level);
-    }
-
-    let log_dir = get_log_dir();
-
-    // Create log directory if it doesn't exist
-    if let Err(e) = fs::create_dir_all(&log_dir) {
-        eprintln!("Failed to create log directory {:?}: {}", log_dir, e);
-        // Fall back to console-only logging
-        return init_console_only(log_level);
-    }
-
-    let log_file = get_log_file_path(&log_dir);
-
-    // Get log level from config or use default
-    let level = log_level.unwrap_or_default().to_level_filter();
-
-    // Also check RUST_LOG environment variable (takes precedence)
-    let level = std::env::var("RUST_LOG")
+/// Resolve the effective log level: the RUST_LOG environment variable takes
+/// precedence over the configured level
+fn resolve_level(log_level: Option<LogLevel>) -> log::LevelFilter {
+    use std::str::FromStr;
+    std::env::var("RUST_LOG")
         .ok()
-        .and_then(|s| match s.to_lowercase().as_str() {
-            "trace" => Some(log::LevelFilter::Trace),
-            "debug" => Some(log::LevelFilter::Debug),
-            "info" => Some(log::LevelFilter::Info),
-            "warn" => Some(log::LevelFilter::Warn),
-            "error" => Some(log::LevelFilter::Error),
-            _ => None,
-        })
-        .unwrap_or(level);
+        .and_then(|s| LogLevel::from_str(&s).ok())
+        .map(LogLevel::to_level_filter)
+        .unwrap_or_else(|| log_level.unwrap_or_default().to_level_filter())
+}
 
-    // Open log file, truncating any existing content (fresh log each launch)
-    let file = match fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&log_file)
-    {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Failed to open log file {:?}: {}", log_file, e);
-            return init_console_only(log_level);
-        }
-    };
-
-    // Setup fern dispatcher
+/// Shared dispatcher setup: log format and noisy-dependency filters
+fn base_dispatch(level: log::LevelFilter) -> fern::Dispatch {
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -113,6 +69,52 @@ pub fn init_logging(
         .level_for("tao", log::LevelFilter::Warn)
         .level_for("mio", log::LevelFilter::Warn)
         .level_for("tokio", log::LevelFilter::Warn)
+}
+
+/// Initialize logging
+///
+/// When `logging_enabled` is true, logs to both file and console.
+/// When false, logs only to console (no file created).
+/// `RUST_LOG` overrides the configured level in both modes.
+///
+/// Returns the path to the log file on success (or placeholder if disabled).
+pub fn init_logging(
+    logging_enabled: bool,
+    log_level: Option<LogLevel>,
+) -> Result<PathBuf, fern::InitError> {
+    let level = resolve_level(log_level);
+
+    // If logging is disabled, only log to console
+    if !logging_enabled {
+        return init_console_only(level);
+    }
+
+    let log_dir = get_log_dir();
+
+    // Create log directory if it doesn't exist
+    if let Err(e) = fs::create_dir_all(&log_dir) {
+        eprintln!("Failed to create log directory {:?}: {}", log_dir, e);
+        // Fall back to console-only logging
+        return init_console_only(level);
+    }
+
+    let log_file = get_log_file_path(&log_dir);
+
+    // Open log file, truncating any existing content (fresh log each launch)
+    let file = match fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_file)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to open log file {:?}: {}", log_file, e);
+            return init_console_only(level);
+        }
+    };
+
+    base_dispatch(level)
         // Output to both file and stdout
         .chain(file)
         .chain(std::io::stdout())
@@ -121,26 +123,9 @@ pub fn init_logging(
     Ok(log_file)
 }
 
-/// Fallback: console-only logging if file logging fails
-fn init_console_only(log_level: Option<LogLevel>) -> Result<PathBuf, fern::InitError> {
-    let level = log_level.unwrap_or_default().to_level_filter();
-
-    fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {} {}] {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
-                record.level(),
-                record.target(),
-                message
-            ))
-        })
-        .level(level)
-        .level_for("tao", log::LevelFilter::Warn)
-        .level_for("mio", log::LevelFilter::Warn)
-        .level_for("tokio", log::LevelFilter::Warn)
-        .chain(std::io::stdout())
-        .apply()?;
+/// Fallback: console-only logging if file logging is disabled or fails
+fn init_console_only(level: log::LevelFilter) -> Result<PathBuf, fern::InitError> {
+    base_dispatch(level).chain(std::io::stdout()).apply()?;
 
     // Return a placeholder path
     Ok(PathBuf::from("(console only)"))
