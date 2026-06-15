@@ -18,6 +18,7 @@ menu:
   settings: "Settings..."
   show_logs: "Show Logs..."
   about: "About Filen Menubar"
+  check_for_updates: "Check for Updates..."
   quit: "Quit"
 
 # Sync states
@@ -47,3 +48,11 @@ dialog:
   logout_cancel: "Cancel"
   login_help_title: "Log in to Filen"
   login_help_message: "No Filen CLI session was found. Open a terminal, run 'filen' and log in to your account, then click Login again."
+  update_available_title: "Update Available"
+  update_available_message: "Filen Menubar %{version} is available. You're running %{current}.\n\nOpen the download page?"
+  update_download: "Download"
+  update_later: "Later"
+  up_to_date_title: "You're Up to Date"
+  up_to_date_message: "You're running the latest version (%{current})."
+  update_check_failed_title: "Update Check Failed"
+  update_check_failed_message: "Could not check for updates. Please check your internet connection and try again."

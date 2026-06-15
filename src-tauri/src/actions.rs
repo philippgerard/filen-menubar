@@ -210,6 +210,75 @@ pub fn show_about(app_handle: &tauri::AppHandle) {
         .blocking_show();
 }
 
+/// Handle the "Check for Updates..." action.
+///
+/// Asks GitHub for the latest release and reports the result via a dialog:
+/// - newer version available -> offer to open the release page
+/// - already up to date -> confirm
+/// - check failed (offline, etc.) -> error dialog
+///
+/// This only runs when the user explicitly clicks the menu item; there is no
+/// automatic background polling.
+pub async fn check_for_updates(app_handle: &tauri::AppHandle) {
+    log::info!("Checking for updates");
+
+    match crate::update::check_for_update().await {
+        Ok(Some(info)) => prompt_update_available(app_handle, &info),
+        Ok(None) => {
+            log::info!("No update available; running the latest version");
+            let current = env!("CARGO_PKG_VERSION");
+            app_handle
+                .dialog()
+                .message(rust_i18n::t!(
+                    "dialog.up_to_date_message",
+                    current = current
+                ))
+                .title(rust_i18n::t!("dialog.up_to_date_title"))
+                .kind(MessageDialogKind::Info)
+                .blocking_show();
+        }
+        Err(e) => {
+            log::warn!("Update check failed: {e}");
+            app_handle
+                .dialog()
+                .message(rust_i18n::t!("dialog.update_check_failed_message"))
+                .title(rust_i18n::t!("dialog.update_check_failed_title"))
+                .kind(MessageDialogKind::Error)
+                .blocking_show();
+        }
+    }
+}
+
+/// Show the "update available" dialog and open the release page if the user accepts.
+fn prompt_update_available(app_handle: &tauri::AppHandle, info: &crate::update::UpdateInfo) {
+    let current = env!("CARGO_PKG_VERSION");
+    let message = rust_i18n::t!(
+        "dialog.update_available_message",
+        version = &info.version,
+        current = current
+    );
+
+    let open = app_handle
+        .dialog()
+        .message(message)
+        .title(rust_i18n::t!("dialog.update_available_title"))
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            rust_i18n::t!("dialog.update_download").to_string(),
+            rust_i18n::t!("dialog.update_later").to_string(),
+        ))
+        .blocking_show();
+
+    if open {
+        log::info!("Opening release page: {}", info.url);
+        if let Err(e) = open::that(&info.url) {
+            log::error!("Failed to open release page: {e}");
+        }
+    } else {
+        log::info!("User dismissed update notification for {}", info.version);
+    }
+}
+
 /// Handle quit action - stop sync and exit the application
 pub async fn quit(cli_manager: &CliManager, app_handle: &tauri::AppHandle) {
     log::info!("Quit requested");

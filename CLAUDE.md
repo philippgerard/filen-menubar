@@ -57,6 +57,7 @@ src-tauri/src/
 ├── error.rs        # Unified error types
 ├── logging.rs      # File logging setup
 ├── state.rs        # AppState with watch channel for reactive updates
+├── update.rs       # GitHub release update check (manual "Check for Updates")
 └── tray/
     ├── mod.rs      # TrayInterface trait, shared helpers
     ├── macos.rs    # Tauri TrayIcon implementation
@@ -76,6 +77,7 @@ src-tauri/src/
 - **state.rs**: `AppState` with `tokio::sync::watch` channel for reactive UI updates. Includes state machine validation for `SyncState` transitions.
 - **config.rs**: Configuration with type-safe `SyncMode` and `LogLevel` enums.
 - **error.rs**: Unified `AppError`, `CliError`, `ConfigError`, `CredentialError` types.
+- **update.rs**: Checks the GitHub Releases API (via `curl`) for a newer version than `CARGO_PKG_VERSION`. Only runs when the user clicks "Check for Updates..." - no background polling. On a newer release it opens the release page in the browser (notify-and-open, not auto-install).
 - **tray/**: Platform-specific implementations behind `TrayInterface` trait
 
 ### Event Flow

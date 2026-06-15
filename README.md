@@ -13,6 +13,7 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 - **Native KDE support** - Uses StatusNotifierItem (SNI) via ksni for first-class KDE integration
 - **Auto-sync** - Optionally start syncing on launch
 - **Logout confirmation** - Prevents accidental logout with a confirmation dialog
+- **Update check** - Manually check GitHub for a newer release from the tray menu
 
 ## Requirements
 
@@ -230,10 +231,13 @@ Up to date              ← Shows "X files remaining..." when syncing
 Open Local Folder       → Opens your local sync folder in Finder/file manager
 Open Web UI             → Opens Filen web interface in browser
 ─────────────
+Pause Syncing           → Pause/resume syncing (label toggles with state)
 Logout                  → Stop sync and clear session (with confirmation)
 ─────────────
 Settings...             → Opens config file in editor
 Show Logs...            → Opens log folder (for debugging)
+About Filen Menubar     → Shows version and app info
+Check for Updates...    → Checks GitHub for a newer release, opens download page
 ─────────────
 Quit                    → Stop syncing and exit
 ```
@@ -426,11 +430,13 @@ The `rust_i18n` crate compiles translations at build time. If you modify locale 
 ```
 src-tauri/
 ├── src/
-│   ├── lib.rs          # Main app setup, action handlers, status loop
-│   ├── cli.rs          # CLI subprocess management, JSON event parsing
+│   ├── lib.rs          # Main app setup, action dispatch, status loop
+│   ├── actions.rs      # Tray action handlers (command pattern)
+│   ├── cli/            # CLI subprocess management, JSON event parsing
 │   ├── config.rs       # Configuration loading/saving
 │   ├── credentials.rs  # CLI session detection
 │   ├── state.rs        # Shared app state (sync status, pending count)
+│   ├── update.rs       # GitHub release update check
 │   └── tray/
 │       ├── mod.rs      # TrayInterface trait
 │       ├── macos.rs    # macOS tray implementation (Tauri TrayIcon)

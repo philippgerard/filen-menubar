@@ -417,6 +417,12 @@ fn build_menu(
     let about_item = MenuItemBuilder::with_id("about", rust_i18n::t!("menu.about")).build(app)?;
     builder = builder.item(&about_item);
 
+    // Check for Updates
+    let check_updates_item =
+        MenuItemBuilder::with_id("check_for_updates", rust_i18n::t!("menu.check_for_updates"))
+            .build(app)?;
+    builder = builder.item(&check_updates_item);
+
     builder = builder.separator();
 
     // Quit
@@ -490,6 +496,7 @@ pub fn create_tray(
             "settings" => Some(TrayAction::Settings),
             "show_logs" => Some(TrayAction::ShowLogs),
             "about" => Some(TrayAction::About),
+            "check_for_updates" => Some(TrayAction::CheckForUpdates),
             "quit" => Some(TrayAction::Quit),
             _ => None,
         };

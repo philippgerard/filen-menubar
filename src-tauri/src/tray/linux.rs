@@ -411,6 +411,20 @@ impl Tray for FilenTray {
             .into(),
         );
 
+        // Check for Updates
+        items.push(
+            StandardItem {
+                label: rust_i18n::t!("menu.check_for_updates").to_string(),
+                activate: Box::new(move |_| {
+                    if let Ok(s) = state_clone9.read() {
+                        let _ = s.action_tx.send(TrayAction::CheckForUpdates);
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+
         items.push(MenuItem::Separator);
 
         // Quit

@@ -112,6 +112,7 @@ pub enum TrayAction {
     Settings,
     ShowLogs,
     About,
+    CheckForUpdates,
     Quit,
 }
 

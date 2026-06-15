@@ -2,6 +2,7 @@ mod actions;
 mod credentials;
 mod logging;
 mod tray;
+mod update;
 
 // Public modules for integration testing
 pub mod cli;
@@ -63,6 +64,7 @@ async fn handle_tray_action(
         TrayAction::Settings => actions::open_settings(),
         TrayAction::ShowLogs => actions::show_logs(),
         TrayAction::About => actions::show_about(app_handle),
+        TrayAction::CheckForUpdates => actions::check_for_updates(app_handle).await,
         TrayAction::Quit => actions::quit(cli_manager, app_handle).await,
     }
 }

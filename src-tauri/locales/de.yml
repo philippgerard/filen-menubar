@@ -18,6 +18,7 @@ menu:
   settings: "Einstellungen..."
   show_logs: "Protokolle anzeigen..."
   about: "Über Filen Menubar"
+  check_for_updates: "Nach Updates suchen..."
   quit: "Beenden"
 
 # Sync states
@@ -47,3 +48,11 @@ dialog:
   logout_cancel: "Abbrechen"
   login_help_title: "Bei Filen anmelden"
   login_help_message: "Keine Filen-CLI-Sitzung gefunden. Öffnen Sie ein Terminal, führen Sie 'filen' aus und melden Sie sich an. Klicken Sie danach erneut auf Anmelden."
+  update_available_title: "Update verfügbar"
+  update_available_message: "Filen Menubar %{version} ist verfügbar. Sie verwenden %{current}.\n\nDownload-Seite öffnen?"
+  update_download: "Herunterladen"
+  update_later: "Später"
+  up_to_date_title: "Sie sind auf dem neuesten Stand"
+  up_to_date_message: "Sie verwenden die neueste Version (%{current})."
+  update_check_failed_title: "Update-Prüfung fehlgeschlagen"
+  update_check_failed_message: "Es konnte nicht nach Updates gesucht werden. Bitte überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
