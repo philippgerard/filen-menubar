@@ -206,6 +206,11 @@ async fn handle_text_output(state: &AppState, line: &str) {
     }
 }
 
+/// Return at most `max_chars` Unicode scalar values for diagnostic logging.
+fn text_preview(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
 /// Manages the Filen CLI process
 pub struct CliManager {
     process: Arc<RwLock<Option<Child>>>,
@@ -409,7 +414,7 @@ impl CliManager {
                                                 log::debug!(
                                                     "Failed to parse JSON event: {} - {}",
                                                     e,
-                                                    &complete_json[..complete_json.len().min(100)]
+                                                    text_preview(&complete_json, 100)
                                                 );
                                             }
                                         }
@@ -566,5 +571,23 @@ impl CliManager {
         // The Filen CLI doesn't currently expose a storage quota command
         // Return default values for now
         Ok(StorageInfo::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_preview;
+
+    #[test]
+    fn text_preview_preserves_short_text_and_zero_limit() {
+        assert_eq!(text_preview("short é text", 100), "short é text");
+        assert_eq!(text_preview("not empty", 0), "");
+    }
+
+    #[test]
+    fn text_preview_truncates_at_unicode_character_boundary() {
+        // The old 100-byte slice ended in the middle of `é`.
+        let text = format!("{}é-tail", "a".repeat(99));
+        assert_eq!(text_preview(&text, 100), format!("{}é", "a".repeat(99)));
     }
 }

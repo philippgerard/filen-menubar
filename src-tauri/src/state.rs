@@ -245,13 +245,32 @@ impl CurrentTransfer {
             TransferDirection::Download => "↓",
         };
 
-        let filename = if self.filename.len() > max_filename_len {
-            format!("{}…", &self.filename[..max_filename_len - 1])
-        } else {
-            self.filename.clone()
-        };
+        let filename = truncate_with_ellipsis(&self.filename, max_filename_len);
 
         format!("{} {}", arrow, filename)
+    }
+}
+
+/// Truncate text by Unicode scalar values, reserving one character for an ellipsis.
+///
+/// Rust strings are UTF-8, so a byte-indexed slice can split a multibyte character
+/// and panic. The caller's limit is a display-character limit, not a byte limit.
+fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let mut chars = text.chars();
+    let mut prefix: String = chars.by_ref().take(max_chars).collect();
+
+    if chars.next().is_some() {
+        // The prefix contains max_chars characters. Replace the last one so the
+        // ellipsis itself occupies one slot in the requested limit.
+        let _ = prefix.pop();
+        prefix.push('…');
+        prefix
+    } else {
+        text.to_string()
     }
 }
 
@@ -546,16 +565,42 @@ mod tests {
     }
 
     #[test]
-    fn test_display_text_truncation() {
-        let transfer = CurrentTransfer::new(
-            TransferDirection::Upload,
-            "very_long_filename_that_exceeds_limit.txt".to_string(),
-            100,
-        );
+    fn test_display_text_truncates_ascii_to_exact_limit() {
+        let transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "abcdefghijk".to_string(), 100);
         let text = transfer.display_text(10);
-        assert!(text.contains("…"));
-        // Truncated part should be shorter than original
-        assert!(text.len() < "very_long_filename_that_exceeds_limit.txt".len() + 10);
+        assert_eq!(text, "↑ abcdefghi…");
+        assert_eq!(text.trim_start_matches("↑ ").chars().count(), 10);
+    }
+
+    #[test]
+    fn test_display_text_preserves_ascii_at_exact_limit() {
+        let transfer =
+            CurrentTransfer::new(TransferDirection::Upload, "abcdefghij".to_string(), 100);
+        assert_eq!(transfer.display_text(10), "↑ abcdefghij");
+    }
+
+    #[test]
+    fn test_display_text_truncates_at_unicode_character_boundary() {
+        // The old byte slice ended in the middle of `é` at byte offset 24.
+        let filename = format!("{}ézz", "a".repeat(23));
+        let transfer = CurrentTransfer::new(TransferDirection::Upload, filename, 100);
+        assert_eq!(transfer.display_text(25), format!("↑ {}é…", "a".repeat(23)));
+    }
+
+    #[test]
+    fn test_display_text_preserves_multibyte_name_at_character_limit() {
+        let filename = "é".repeat(10);
+        let transfer = CurrentTransfer::new(TransferDirection::Upload, filename.clone(), 100);
+        assert_eq!(transfer.display_text(10), format!("↑ {filename}"));
+    }
+
+    #[test]
+    fn test_display_text_handles_zero_and_one_character_limits() {
+        let transfer =
+            CurrentTransfer::new(TransferDirection::Download, "filename".to_string(), 100);
+        assert_eq!(transfer.display_text(0), "↓ ");
+        assert_eq!(transfer.display_text(1), "↓ …");
     }
 
     #[test]
