@@ -67,22 +67,25 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          set -euo pipefail
+
           # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          keychain_path="$RUNNER_TEMP/app-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          certificate_path="$RUNNER_TEMP/certificate.p12"
 
           # Decode certificate
-          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $RUNNER_TEMP/certificate.p12
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$certificate_path"
 
           # Create and configure keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
 
           # Import certificate
-          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
+          security import "$certificate_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain_path"
+          security list-keychain -d user -s "$keychain_path"
 
       - name: Build Tauri app (macOS with signing)
         if: matrix.platform == 'macos-latest'
@@ -92,6 +95,46 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Notarize and verify macOS release disk image
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'macos-latest'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"
+          dmg_files=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+
+          [[ -d "$app_path" ]] || {
+            echo "macOS application bundle was not produced" >&2
+            exit 1
+          }
+          [[ "${#dmg_files[@]}" -eq 1 ]] || {
+            echo "expected exactly one macOS disk image" >&2
+            exit 1
+          }
+          dmg_path="${dmg_files[0]}"
+
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+          codesign --verify --verbose=4 "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          spctl --assess --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$dmg_path"
 
       - name: Build Tauri app (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -129,7 +172,7 @@ jobs:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: true
           files: artifacts/**/*
