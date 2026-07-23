@@ -105,6 +105,42 @@ fn needs_timer_tick(state: SyncState) -> bool {
     is_animated_state(state) || state == SyncState::Offline || state == SyncState::Error
 }
 
+/// Stop the CLI process tree before Unix terminates the app.
+///
+/// Home Manager and other application updaters normally stop GUI apps with
+/// SIGTERM. Without an explicit handler, the OS exits this process immediately
+/// and does not run Rust destructors, leaving the long-running Filen CLI
+/// orphaned. Tray-menu quits already call the same cleanup path in actions.rs.
+#[cfg(unix)]
+fn install_termination_signal_handler(app_handle: tauri::AppHandle, cli_manager: Arc<CliManager>) {
+    tauri::async_runtime::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(signal) => signal,
+            Err(error) => {
+                log::error!("Failed to install SIGTERM handler: {}", error);
+                return;
+            }
+        };
+        let mut sigint = match signal(SignalKind::interrupt()) {
+            Ok(signal) => signal,
+            Err(error) => {
+                log::error!("Failed to install SIGINT handler: {}", error);
+                return;
+            }
+        };
+
+        tokio::select! {
+            _ = sigterm.recv() => log::info!("Received SIGTERM, shutting down"),
+            _ = sigint.recv() => log::info!("Received SIGINT, shutting down"),
+        }
+
+        cli_manager.stop_sync().await;
+        app_handle.exit(0);
+    });
+}
+
 /// Start the status update loop
 ///
 /// This uses a hybrid approach:
@@ -291,6 +327,9 @@ pub fn run() {
             let config = config_clone.clone();
             let app_state = app_state_clone.clone();
             let cli_manager = cli_manager_clone.clone();
+
+            #[cfg(unix)]
+            install_termination_signal_handler(app_handle.clone(), cli_manager.clone());
 
             // Spawn action handler
             let tray_for_handler = tray.clone();

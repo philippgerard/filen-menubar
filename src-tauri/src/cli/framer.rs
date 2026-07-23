@@ -7,7 +7,9 @@
 //! and escape sequences, so braces inside file names (e.g. `file{1.txt`)
 //! cannot corrupt the depth tracking. It also recovers from stray closing
 //! braces in plain-text output and caps the buffer size so a misbehaving
-//! CLI cannot grow memory unboundedly.
+//! CLI cannot grow memory unboundedly. Oversized objects are discarded while
+//! their structure is still tracked, so nested fragments cannot be mistaken
+//! for subsequent top-level events.
 
 /// Maximum bytes buffered while waiting for a JSON object to complete.
 /// Anything larger is not a sync event we care about; discard it.
@@ -27,6 +29,9 @@ pub struct JsonFramer {
     depth: i32,
     in_string: bool,
     escaped: bool,
+    discarding: bool,
+    discard_line_start: bool,
+    discard_closing_line: bool,
 }
 
 impl JsonFramer {
@@ -34,20 +39,66 @@ impl JsonFramer {
         Self::default()
     }
 
-    /// Feed one line of CLI output. Returns any frames completed by this line.
-    pub fn push_line(&mut self, line: &str) -> Vec<Frame> {
+    /// Feed one chunk of CLI output. Returns every frame completed in it.
+    ///
+    /// Chunks may contain partial lines, many lines, or several JSON objects.
+    /// Processing the stream directly is important because one ignored-tree
+    /// event from the CLI can contain more than 100,000 pretty-printed lines.
+    pub fn push_chunk(&mut self, chunk: &str) -> Vec<Frame> {
         let mut frames = Vec::new();
 
-        // Plain text line while not inside a JSON object
-        if self.buffer.is_empty() && !line.trim_start().starts_with('{') {
-            let text = line.trim();
-            if !text.is_empty() {
-                frames.push(Frame::Text(text.to_string()));
-            }
-            return frames;
-        }
+        for ch in chunk.chars() {
+            // At top level, collect ordinary CLI output until the next newline.
+            // A top-level JSON object begins with `{`; tolerate indentation
+            // before it without treating the whitespace as a text frame.
+            if self.depth == 0 && !self.discarding {
+                if ch == '{' && self.buffer.trim().is_empty() {
+                    self.buffer.push(ch);
+                    self.depth = 1;
+                    continue;
+                }
 
-        for ch in line.chars() {
+                if ch == '\n' {
+                    let text = self.buffer.trim();
+                    if !text.is_empty() {
+                        frames.push(Frame::Text(text.to_string()));
+                    }
+                    self.buffer.clear();
+                } else if ch != '\r' || !self.buffer.is_empty() {
+                    self.buffer.push(ch);
+                }
+                continue;
+            }
+
+            // The CLI pretty-prints each top-level event and places its outer
+            // closing brace alone at column zero. Once an object is already
+            // oversized and being discarded, this is a safe fallback boundary
+            // even if malformed or truncated nested data left brace depth
+            // inconsistent. Indented nested braces cannot match it.
+            let discard_boundary = if self.discarding {
+                match ch {
+                    '\n' => {
+                        let boundary = self.discard_closing_line;
+                        self.discard_line_start = true;
+                        self.discard_closing_line = false;
+                        boundary
+                    }
+                    '\r' | ' ' | '\t' if self.discard_closing_line => false,
+                    '}' if self.discard_line_start => {
+                        self.discard_line_start = false;
+                        self.discard_closing_line = true;
+                        false
+                    }
+                    _ => {
+                        self.discard_line_start = false;
+                        self.discard_closing_line = false;
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
             if self.in_string {
                 if self.escaped {
                     self.escaped = false;
@@ -56,38 +107,51 @@ impl JsonFramer {
                 } else if ch == '"' {
                     self.in_string = false;
                 }
-                continue;
-            }
-            match ch {
-                '"' => self.in_string = true,
-                '{' => self.depth += 1,
-                '}' => self.depth -= 1,
-                _ => {}
-            }
-        }
-
-        self.buffer.push_str(line);
-        self.buffer.push('\n');
-
-        if self.depth <= 0 {
-            let complete = self.buffer.trim();
-            if !complete.is_empty() {
-                if complete.starts_with('{') && self.depth == 0 {
-                    frames.push(Frame::Json(complete.to_string()));
-                } else {
-                    // Stray closing braces or malformed output: surface as text
-                    frames.push(Frame::Text(complete.to_string()));
+            } else {
+                match ch {
+                    '"' => self.in_string = true,
+                    '{' => self.depth += 1,
+                    '}' => self.depth -= 1,
+                    _ => {}
                 }
             }
-            self.reset();
-        } else if self.buffer.len() > MAX_BUFFER_BYTES {
-            log::warn!(
-                "Discarding oversized CLI output buffer ({} bytes)",
-                self.buffer.len()
-            );
-            self.reset();
+
+            if !self.discarding {
+                self.buffer.push(ch);
+            }
+
+            if self.depth <= 0 || discard_boundary {
+                if !self.discarding {
+                    let complete = self.buffer.trim();
+                    if !complete.is_empty() {
+                        if complete.starts_with('{') && self.depth == 0 {
+                            frames.push(Frame::Json(complete.to_string()));
+                        } else {
+                            frames.push(Frame::Text(complete.to_string()));
+                        }
+                    }
+                }
+                self.reset();
+            } else if !self.discarding && self.buffer.len() > MAX_BUFFER_BYTES {
+                log::warn!(
+                    "Discarding oversized CLI JSON object after {} buffered bytes",
+                    self.buffer.len()
+                );
+                self.buffer.clear();
+                self.discarding = true;
+                self.discard_line_start = ch == '\n';
+                self.discard_closing_line = false;
+            }
         }
 
+        frames
+    }
+
+    /// Feed one line of CLI output. Retained for focused tests and callers that
+    /// naturally receive complete lines.
+    pub fn push_line(&mut self, line: &str) -> Vec<Frame> {
+        let mut frames = self.push_chunk(line);
+        frames.extend(self.push_chunk("\n"));
         frames
     }
 
@@ -96,6 +160,9 @@ impl JsonFramer {
         self.depth = 0;
         self.in_string = false;
         self.escaped = false;
+        self.discarding = false;
+        self.discard_line_start = false;
+        self.discard_closing_line = false;
     }
 }
 
@@ -128,6 +195,35 @@ mod tests {
             }
             other => panic!("Expected Json frame, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_chunk_can_contain_text_and_multiple_json_events() {
+        let mut f = JsonFramer::new();
+        let frames = f.push_chunk(
+            "Filen CLI v0.0.36\n{\"type\":\"cycleStarted\"}\n\
+             {\n  \"type\": \"cycleSuccess\"\n}\n",
+        );
+
+        assert_eq!(
+            frames,
+            vec![
+                Frame::Text("Filen CLI v0.0.36".to_string()),
+                json(r#"{"type":"cycleStarted"}"#),
+                json("{\n  \"type\": \"cycleSuccess\"\n}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_chunk_boundaries_inside_strings_preserve_framing() {
+        let mut f = JsonFramer::new();
+        assert!(f.push_chunk(r#"{"path":"quoted \"#).is_empty());
+        assert!(f.push_chunk(r#"" brace { and "#).is_empty());
+        let frames = f.push_chunk(r#"text"}{"type":"cycleSuccess"}"#);
+
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[1], json(r#"{"type":"cycleSuccess"}"#));
     }
 
     #[test]
@@ -181,9 +277,91 @@ mod tests {
         let big_line = format!("\"key\": \"{}\",", "x".repeat(600 * 1024));
         f.push_line(&big_line);
         f.push_line(&big_line);
-        // Buffer exceeded the cap and was discarded; framer accepts new events
+
+        // The payload buffer is gone, but the framer must preserve the outer
+        // object's structural state until its matching closing brace arrives.
+        assert!(f.discarding);
+        assert_eq!(f.depth, 1);
+
+        // A complete-looking nested object is still part of the discarded
+        // payload and must not be surfaced as a top-level event.
+        assert!(f.push_line(r#"{"type":"cycleSuccess"}"#).is_empty());
+        assert!(f.discarding);
+        assert_eq!(f.depth, 1);
+
+        // Closing the original object restores normal framing.
+        assert!(f.push_line("}").is_empty());
+        assert!(!f.discarding);
+        assert_eq!(f.depth, 0);
+
         let frames = f.push_line(r#"{"type":"cycleSuccess"}"#);
         assert_eq!(frames, vec![json(r#"{"type":"cycleSuccess"}"#)]);
+    }
+
+    #[test]
+    fn test_oversized_pretty_printed_event_emits_no_fragments() {
+        let mut f = JsonFramer::new();
+
+        assert!(f.push_line("{").is_empty());
+        assert!(f.push_line(r#"  "type": "remoteTreeIgnored","#).is_empty());
+        assert!(f.push_line(r#"  "data": {"#).is_empty());
+        assert!(f.push_line(r#"    "ignored": ["#).is_empty());
+
+        let ignored_path = "x".repeat(2048);
+        for index in 0..1024 {
+            let frames = f.push_line(&format!(
+                r#"      {{"relativePath":"/Photos/{index}/{ignored_path}","reason":"filenIgnore"}},"#
+            ));
+            assert!(
+                frames.is_empty(),
+                "oversized payload leaked a fragment frame at item {index}"
+            );
+        }
+
+        assert!(f.discarding);
+        assert!(f.push_line("    ]").is_empty());
+        assert!(f.push_line("  }").is_empty());
+        assert!(f.push_line("}").is_empty());
+        assert!(!f.discarding);
+
+        let frames = f.push_line(r#"{"type":"cycleSuccess"}"#);
+        assert_eq!(frames, vec![json(r#"{"type":"cycleSuccess"}"#)]);
+    }
+
+    #[test]
+    fn test_oversized_hundred_thousand_line_chunk_recovers_next_event() {
+        let mut f = JsonFramer::new();
+        let mut output = String::from("{\n  \"type\": \"remoteTreeIgnored\",\n  \"data\": [\n");
+        output.push_str(&"    {\"path\":\"ignored\"},\n".repeat(110_000));
+        output.push_str("    {\"path\":\"last\"}\n  ]\n}\n");
+        output.push_str("{\"type\":\"cycleSuccess\"}\n");
+
+        let frames = f.push_chunk(&output);
+        assert_eq!(frames, vec![json(r#"{"type":"cycleSuccess"}"#)]);
+        assert!(!f.discarding);
+        assert_eq!(f.depth, 0);
+    }
+
+    #[test]
+    fn test_oversized_pretty_event_recovers_at_unindented_outer_close() {
+        let mut f = JsonFramer::new();
+        f.push_chunk("{\n  \"data\": {\n");
+        f.push_chunk(&format!(
+            "    \"payload\": \"{}\",\n",
+            "x".repeat(1024 * 1024)
+        ));
+        assert!(f.discarding);
+
+        // Simulate malformed/truncated nested data leaving structural depth
+        // wrong. An indented nested close must not end the discarded frame.
+        f.push_chunk("    {\n  }\n");
+        assert!(f.discarding);
+
+        // The CLI's column-zero outer close is an unambiguous frame boundary.
+        let frames = f.push_chunk("}\n{\"type\":\"cycleSuccess\"}\n");
+        assert_eq!(frames, vec![json(r#"{"type":"cycleSuccess"}"#)]);
+        assert!(!f.discarding);
+        assert_eq!(f.depth, 0);
     }
 
     #[test]

@@ -50,7 +50,7 @@ use network::is_network_error;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
@@ -185,6 +185,57 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
         }
         CliEvent::Unknown => {
             // Ignore unknown event types
+        }
+    }
+}
+
+async fn handle_cli_frames(state: &AppState, frames: Vec<Frame>) {
+    for frame in frames {
+        match frame {
+            Frame::Json(complete_json) => match serde_json::from_str::<CliEvent>(&complete_json) {
+                Ok(event) => {
+                    handle_cli_event(state, event).await;
+                }
+                Err(e) => {
+                    log::debug!(
+                        "Failed to parse JSON event: {} - {}",
+                        e,
+                        text_preview(&complete_json, 100)
+                    );
+                }
+            },
+            Frame::Text(text) => {
+                handle_text_output(state, &text).await;
+            }
+        }
+    }
+}
+
+/// Decode the valid UTF-8 prefix currently available in `buffer`.
+///
+/// A read may end in the middle of a multi-byte character. Retain only that
+/// incomplete suffix for the next chunk; actual invalid UTF-8 is lossily
+/// decoded so malformed CLI diagnostics cannot stall the monitor.
+fn take_valid_utf8(buffer: &mut Vec<u8>) -> Option<String> {
+    if buffer.is_empty() {
+        return None;
+    }
+
+    match std::str::from_utf8(buffer) {
+        Ok(_) => String::from_utf8(std::mem::take(buffer)).ok(),
+        Err(error) if error.error_len().is_none() => {
+            let valid_len = error.valid_up_to();
+            if valid_len == 0 {
+                return None;
+            }
+
+            let incomplete_suffix = buffer.split_off(valid_len);
+            let valid_prefix = std::mem::replace(buffer, incomplete_suffix);
+            String::from_utf8(valid_prefix).ok()
+        }
+        Err(_) => {
+            let invalid = std::mem::take(buffer);
+            Some(String::from_utf8_lossy(&invalid).into_owned())
         }
     }
 }
@@ -385,47 +436,35 @@ impl CliManager {
         let stopping = self.stopping.clone();
         tokio::spawn(async move {
             if let Some(stdout) = stdout {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
+                let mut reader = BufReader::new(stdout);
+                let mut chunk = [0_u8; 64 * 1024];
+                let mut pending = Vec::new();
 
                 // Frames multi-line pretty-printed JSON objects from the CLI
                 let mut framer = JsonFramer::new();
 
                 loop {
-                    // Check for shutdown signal (non-blocking)
-                    if shutdown_rx.try_recv().is_ok() {
-                        log::info!("Sync monitor received shutdown signal");
-                        break;
-                    }
-
-                    // Try to read a line with a short timeout
-                    match timeout(Duration::from_secs(1), lines.next_line()).await {
-                        Ok(Ok(Some(line))) => {
-                            log::debug!("CLI stdout: {}", line);
-
-                            for frame in framer.push_line(&line) {
-                                match frame {
-                                    Frame::Json(complete_json) => {
-                                        match serde_json::from_str::<CliEvent>(&complete_json) {
-                                            Ok(event) => {
-                                                handle_cli_event(&state, event).await;
-                                            }
-                                            Err(e) => {
-                                                log::debug!(
-                                                    "Failed to parse JSON event: {} - {}",
-                                                    e,
-                                                    text_preview(&complete_json, 100)
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Frame::Text(text) => {
-                                        handle_text_output(&state, &text).await;
-                                    }
-                                }
+                    tokio::select! {
+                        _ = shutdown_rx.recv() => {
+                            log::info!("Sync monitor received shutdown signal");
+                            break;
+                        }
+                        result = reader.read(&mut chunk) => match result {
+                        Ok(bytes_read) if bytes_read > 0 => {
+                            pending.extend_from_slice(&chunk[..bytes_read]);
+                            if let Some(text) = take_valid_utf8(&mut pending) {
+                                log::debug!("Read {} bytes from CLI stdout", bytes_read);
+                                let frames = framer.push_chunk(&text);
+                                handle_cli_frames(&state, frames).await;
                             }
                         }
-                        Ok(Ok(None)) | Ok(Err(_)) => {
+                        Ok(_) | Err(_) => {
+                            if !pending.is_empty() {
+                                let text = String::from_utf8_lossy(&pending).into_owned();
+                                let frames = framer.push_chunk(&text);
+                                handle_cli_frames(&state, frames).await;
+                            }
+
                             // EOF or read error - process exited
                             if stopping.load(Ordering::SeqCst) {
                                 // We killed it on purpose (pause/logout/quit/restart);
@@ -445,9 +484,7 @@ impl CliManager {
                             }
                             break;
                         }
-                        Err(_) => {
-                            // Timeout - no output, that's fine - just continue
-                        }
+                        },
                     }
                 }
             }
@@ -576,7 +613,29 @@ impl CliManager {
 
 #[cfg(test)]
 mod tests {
-    use super::text_preview;
+    use super::{take_valid_utf8, text_preview};
+
+    #[test]
+    fn utf8_extraction_retains_incomplete_character() {
+        let mut buffer = b"first\ncaf\xc3".to_vec();
+        assert_eq!(take_valid_utf8(&mut buffer).as_deref(), Some("first\ncaf"));
+        assert_eq!(buffer, b"\xc3");
+
+        buffer.extend_from_slice(b"\xa9\n");
+        assert_eq!(take_valid_utf8(&mut buffer).as_deref(), Some("\u{e9}\n"));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn utf8_extraction_handles_many_lines_in_one_chunk() {
+        let expected = "ignored\n".repeat(110_000);
+        let mut buffer = expected.as_bytes().to_vec();
+        assert_eq!(
+            take_valid_utf8(&mut buffer).as_deref(),
+            Some(expected.as_str())
+        );
+        assert!(buffer.is_empty());
+    }
 
     #[test]
     fn text_preview_preserves_short_text_and_zero_limit() {
