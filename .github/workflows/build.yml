@@ -164,7 +164,17 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # Build where pacman lives, so makepkg and namcap are the real thing.
-    container: archlinux:base-devel
+    #
+    # An authenticated pull gets a far higher Docker Hub rate limit than the
+    # anonymous per-IP one, which is shared across all Actions runners. The
+    # credentials belong here rather than in a docker/login-action step: the
+    # job container is pulled during "Initialize containers", before any step
+    # of this job runs, so a login step would come too late.
+    container:
+      image: archlinux:base-devel
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Install container tooling
