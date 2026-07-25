@@ -127,6 +127,11 @@ Keep versions in sync across all three files:
 - `src-tauri/tauri.conf.json` - Tauri app version
 - `src-tauri/Cargo.toml` - Rust crate version
 
+Both lockfiles embed the version too and are easy to forget. Refresh them
+after editing the manifests, or the bump lands incomplete:
+- `package-lock.json` — `npm install`
+- `src-tauri/Cargo.lock` — `cargo update -p filen-menubar`
+
 The version is displayed in the About dialog via `env!("CARGO_PKG_VERSION")`.
 
 `packaging/arch/PKGBUILD.in` needs no version bump — CI substitutes `@PKGVER@`
