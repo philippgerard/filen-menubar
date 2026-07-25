@@ -107,8 +107,12 @@ sudo dnf install filen-menubar-*.rpm
 Install from the AUR with your usual helper:
 
 ```bash
-paru -S filen-menubar-bin   # or: yay -S filen-menubar-bin
+paru -S filen-menubar-bin filen-cli-bin   # or: yay -S ...
 ```
+
+`filen-cli-bin` is the sync backend. It is a standalone binary, so unlike the
+npm route it pulls in no Node.js — you can skip `npm install -g @filen/cli`
+entirely on Arch.
 
 This is the recommended route: pacman owns the files, so `pacman -Qo` works and
 updates arrive with your normal `paru -Sua`. The package repacks the release

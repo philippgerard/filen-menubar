@@ -17,10 +17,13 @@ pkgdesc="Lightweight system tray app for Filen cloud sync"
 arch=('x86_64')
 url="https://github.com/philippgerard/filen-menubar"
 license=('MIT')
-# Arch equivalents of the .deb's Depends: nodejs, libgtk-3-0,
-# libwebkit2gtk-4.1-0, libayatana-appindicator3-1
-depends=('gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator' 'nodejs')
-optdepends=('npm: to install the @filen/cli sync backend the tray drives')
+# Arch equivalents of the .deb's Depends: libgtk-3-0, libwebkit2gtk-4.1-0,
+# libayatana-appindicator3-1. The .deb also pulls nodejs, but only because
+# its sync backend is assumed to come from npm; filen-cli-bin ships a
+# standalone binary that needs no node, so nodejs is optional here.
+depends=('gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator')
+optdepends=('filen-cli-bin: sync backend, standalone binary (recommended)'
+            'nodejs: only needed if you install @filen/cli through npm instead')
 provides=("${_pkgname}=${pkgver}")
 conflicts=("${_pkgname}")
 # Prebuilt upstream binary: leave it exactly as shipped.
