@@ -1,6 +1,6 @@
 [package]
 name = "filen-menubar"
-version = "0.1.27"
+version = "0.1.28"
 description = "A lightweight menubar app for Filen cloud sync"
 authors = ["Philipp Gerard"]
 edition = "2021"
