@@ -129,6 +129,38 @@ Keep versions in sync across all three files:
 
 The version is displayed in the About dialog via `env!("CARGO_PKG_VERSION")`.
 
+`packaging/arch/PKGBUILD.in` needs no version bump — CI substitutes `@PKGVER@`
+from the git tag.
+
+## Arch Packaging
+
+Arch users install `filen-menubar-bin` from the AUR. The package repacks the
+release `.deb` rather than compiling from source.
+
+- `packaging/arch/PKGBUILD.in` — template; `@PKGVER@`, `@SHA256_DEB@` and
+  `@SHA256_LICENSE@` are filled in at release time.
+- `packaging/arch/render.sh` — renders the template and stages both sources
+  under the filenames the `source` array declares, so `makepkg` reuses them
+  instead of downloading.
+- `.github/workflows/build.yml` (`arch` job) — on tag, builds and lints the
+  package in an `archlinux:base-devel` container and attaches the
+  `.pkg.tar.zst` to the release. Uses the `.deb` from the `Linux-x64`
+  artifact, since the release is still a draft at that point.
+- `.github/workflows/aur.yml` — on release **published** (not on tag, because
+  a draft's assets are not downloadable), re-renders against the live
+  download URL and pushes to the AUR. Needs the `AUR_SSH_PRIVATE_KEY` secret.
+
+Test the packaging locally without cutting a release:
+
+```bash
+./packaging/arch/render.sh 0.1.26 /tmp/archbuild path/to/Filen.Menubar_0.1.26_amd64.deb
+cd /tmp/archbuild && makepkg --nodeps -f
+```
+
+The `.deb` ships its desktop file as `Filen Menubar.desktop` (spaces from
+`productName`) and carries no copyright file despite `licenseFile` being set,
+so the PKGBUILD renames the former and fetches `LICENSE` from the tag.
+
 ## macOS Notarization
 
 To build a signed and notarized release, the following environment variables are required:

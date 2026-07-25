@@ -158,8 +158,68 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
           if-no-files-found: error
 
-  release:
+  arch:
+    name: Arch package
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Build where pacman lives, so makepkg and namcap are the real thing.
+    container: archlinux:base-devel
+
+    steps:
+      - name: Install container tooling
+        run: pacman -Syu --needed --noconfirm git namcap
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trust the workspace checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Linux-x64
+          path: linux-artifacts
+
+      - name: Render PKGBUILD
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/tags/v}"
+          deb="$(find linux-artifacts -name '*.deb' -print -quit)"
+          [[ -n "$deb" ]] || {
+            echo "no .deb in the Linux-x64 artifact" >&2
+            exit 1
+          }
+          packaging/arch/render.sh "$version" "$PWD/archbuild" "$deb"
+          cat archbuild/PKGBUILD
+
+      - name: Build package
+        run: |
+          set -euo pipefail
+          # makepkg refuses to run as root, and the container is root.
+          useradd --create-home builder
+          chown -R builder: archbuild
+          # --nodeps: this only repacks a prebuilt binary, so pulling the
+          # runtime deps into the container would buy nothing.
+          runuser -u builder -- \
+            bash -c 'cd archbuild && makepkg --noconfirm --nodeps'
+
+      - name: Lint package
+        run: |
+          set -euo pipefail
+          namcap archbuild/PKGBUILD || echo "::warning::namcap flagged the PKGBUILD"
+          namcap archbuild/*.pkg.tar.zst || echo "::warning::namcap flagged the package"
+
+      - name: Upload Arch artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Arch-x64
+          path: archbuild/*.pkg.tar.zst
+          if-no-files-found: error
+
+  release:
+    needs: [build, arch]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

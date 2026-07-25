@@ -1,0 +1,60 @@
+name: Publish to AUR
+
+# Deliberately keyed off release *publication*, not the tag. build.yml creates
+# the release as a draft, and a draft's assets are not downloadable — pushing
+# to the AUR on the tag would point users at a URL that 404s until the release
+# is published by hand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.1.27 (must already be released)'
+        required: true
+
+jobs:
+  aur:
+    name: filen-menubar-bin
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need every tag: a workflow_dispatch run starts from the default
+          # branch and still has to read LICENSE as of v<version>.
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
+            version='${{ inputs.version }}'
+          else
+            version='${{ github.event.release.tag_name }}'
+          fi
+          version="${version#v}"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the tagged LICENSE
+        run: git checkout "v${{ steps.version.outputs.version }}" -- LICENSE
+
+      - name: Render PKGBUILD
+        # No local .deb here, so render.sh pulls it from the published release.
+        # That is the point: the recorded hash is of the artifact users will
+        # actually download.
+        run: packaging/arch/render.sh "${{ steps.version.outputs.version }}" "$PWD/archbuild"
+
+      - name: Publish to the AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v3
+        with:
+          pkgname: filen-menubar-bin
+          pkgbuild: ./archbuild/PKGBUILD
+          commit_username: Philipp Gerard
+          commit_email: philipp.gerard@zeitdenken.de
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ steps.version.outputs.version }}"
+          ssh_keyscan_types: rsa,ed25519
