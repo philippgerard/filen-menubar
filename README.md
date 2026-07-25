@@ -80,6 +80,7 @@ Download the latest release from the [Releases](https://github.com/philippgerard
 - **macOS:** `.dmg` installer
 - **Linux (Debian/Ubuntu):** `.deb` package
 - **Linux (Fedora/RHEL):** `.rpm` package
+- **Linux (Arch):** [`filen-menubar-bin`](https://aur.archlinux.org/packages/filen-menubar-bin) on the AUR, or the `.pkg.tar.zst` attached to each release
 
 ### Linux (Debian/Ubuntu)
 
@@ -103,7 +104,32 @@ sudo dnf install filen-menubar-*.rpm
 
 ### Linux (Arch/CachyOS/Manjaro)
 
-Use the install script for a complete installation with autostart:
+Install from the AUR with your usual helper:
+
+```bash
+paru -S filen-menubar-bin   # or: yay -S filen-menubar-bin
+```
+
+This is the recommended route: pacman owns the files, so `pacman -Qo` works and
+updates arrive with your normal `paru -Sua`. The package repacks the release
+binary rather than compiling, so it installs in seconds.
+
+Without an AUR helper, grab the `.pkg.tar.zst` from the
+[latest release](https://github.com/philippgerard/filen-menubar/releases/latest):
+
+```bash
+sudo pacman -U filen-menubar-bin-*-x86_64.pkg.tar.zst
+```
+
+Autostart is not configured by either route. To enable it:
+
+```bash
+cp /usr/share/applications/filen-menubar.desktop ~/.config/autostart/
+```
+
+#### Building from source
+
+Use the install script for a complete from-source installation with autostart:
 
 ```bash
 git clone https://github.com/philippgerard/filen-menubar.git
@@ -117,6 +143,11 @@ This will:
 - Install binary to `/usr/local/bin`
 - Create desktop entry and icons
 - Configure autostart on login
+
+> **Note:** `/usr/local/bin` normally precedes `/usr/bin` on `PATH`, so a
+> script-installed binary shadows the packaged one. Pick one route or the
+> other — if you switch to the AUR package, remove the old copy first with
+> `./scripts/install-linux.sh uninstall`.
 
 Or build manually:
 
