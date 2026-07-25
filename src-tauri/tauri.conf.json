@@ -16,6 +16,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "deb", "rpm"],
+    "category": "Utility",
     "publisher": "Philipp Gerard",
     "copyright": "Copyright (c) 2025 Philipp Gerard",
     "licenseFile": "../LICENSE",
