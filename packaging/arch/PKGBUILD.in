@@ -1,11 +1,13 @@
 # Maintainer: Philipp Gerard <philipp.gerard@zeitdenken.de>
-#
-# Template. Placeholders are substituted by CI:
-#   @PKGVER@          release version, e.g. 0.1.27
-#   @SHA256_DEB@      sha256 of the release .deb
-#   @SHA256_LICENSE@  sha256 of LICENSE at tag v@PKGVER@
-#
-# Render locally with packaging/arch/render.sh, which also builds the package.
+#@
+#@ Lines prefixed "#@" are stripped by render.sh and never reach the AUR.
+#@ They are dropped before substitution, so the placeholder names below can
+#@ be written out literally without being replaced:
+#@   @PKGVER@          release version, e.g. 0.1.27
+#@   @SHA256_DEB@      sha256 of the release .deb
+#@   @SHA256_LICENSE@  sha256 of LICENSE at tag v@PKGVER@
+#@
+#@ Render locally with packaging/arch/render.sh, which also stages sources.
 
 pkgname=filen-menubar-bin
 _pkgname=filen-menubar

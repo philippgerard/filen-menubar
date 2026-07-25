@@ -45,7 +45,10 @@ cp -- "${repo_root}/LICENSE" "${outdir}/LICENSE-${version}"
 sha_deb="$(sha256sum "$deb_dest" | cut -d' ' -f1)"
 sha_license="$(sha256sum "${outdir}/LICENSE-${version}" | cut -d' ' -f1)"
 
-sed -e "s|@PKGVER@|${version}|g" \
+# Drop the "#@" template notes first, so the placeholder names documented
+# there are not themselves substituted. sed applies -e in order per line.
+sed -e '/^#@/d' \
+    -e "s|@PKGVER@|${version}|g" \
     -e "s|@SHA256_DEB@|${sha_deb}|g" \
     -e "s|@SHA256_LICENSE@|${sha_license}|g" \
     "$template" >"${outdir}/PKGBUILD"
