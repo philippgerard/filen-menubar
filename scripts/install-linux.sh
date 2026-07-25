@@ -155,8 +155,37 @@ build_app() {
     fi
 }
 
+# Refuse to shadow a distro-packaged install.
+#
+# $INSTALL_DIR precedes /usr/bin on PATH, so dropping a binary here silently
+# overrides a pacman-owned one. The package keeps updating, the user keeps
+# running this build, and nothing indicates why.
+check_shadowing() {
+    command -v pacman >/dev/null 2>&1 || return 0
+
+    local owner
+    if owner="$(pacman -Qoq /usr/bin/filen-menubar 2>/dev/null)" && [ -n "$owner" ]; then
+        print_warning "/usr/bin/filen-menubar is owned by the '$owner' package."
+        print_warning "$INSTALL_DIR comes before /usr/bin on PATH, so installing"
+        print_warning "here would shadow it and pin you to this build."
+        echo ""
+        echo "  Keep the package:  paru -Syu $owner"
+        echo "  Drop the package:  sudo pacman -R $owner"
+        echo "  Install anyway:    FORCE_INSTALL=1 $0 ${SUBCOMMAND:-install}"
+        echo ""
+        [ -n "${FORCE_INSTALL:-}" ] || exit 1
+        print_warning "FORCE_INSTALL set, continuing over the '$owner' package."
+    else
+        print_warning "On Arch the packaged install is usually the better fit:"
+        echo "    paru -S filen-menubar-bin filen-cli-bin"
+        echo ""
+    fi
+}
+
 # Install the binary
 install_binary() {
+    check_shadowing
+
     print_step "Installing binary to $INSTALL_DIR..."
 
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -297,6 +326,9 @@ usage() {
 
 # Main
 main() {
+    # Echoed back in check_shadowing's FORCE_INSTALL hint.
+    SUBCOMMAND="${1:-install}"
+
     echo ""
     echo "╔═══════════════════════════════════════╗"
     echo "║       Filen Menubar Installer         ║"
