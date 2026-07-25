@@ -41,6 +41,16 @@ pub fn find_filen_cli() -> FilenCliInfo {
             PathBuf::from("/opt/homebrew/bin/filen"),
             Some(PathBuf::from("/opt/homebrew/bin")),
         ),
+        // Distro packages. The Arch AUR package filen-cli-bin ships the
+        // standalone release binary as "filen-cli", not "filen".
+        (
+            PathBuf::from("/usr/bin/filen-cli"),
+            Some(PathBuf::from("/usr/bin")),
+        ),
+        (
+            PathBuf::from("/usr/bin/filen"),
+            Some(PathBuf::from("/usr/bin")),
+        ),
         // Official Filen CLI installer path (curl -sL https://filen.io/cli.sh | bash)
         (
             home.join(".filen-cli/bin/filen"),
