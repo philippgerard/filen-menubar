@@ -1,6 +1,7 @@
 mod actions;
 mod credentials;
 mod logging;
+mod login;
 mod tray;
 mod update;
 
@@ -14,8 +15,10 @@ use actions::ActionContext;
 use cli::CliManager;
 use config::Config;
 use credentials::CredentialManager;
+use login::{LoginCommandContext, LoginManager};
 use state::{AppState, StateSnapshot, SyncState};
 use std::sync::Arc;
+use tauri::Manager;
 use tokio::sync::{mpsc, watch};
 use tray::{TrayAction, TrayInterface};
 
@@ -45,6 +48,7 @@ async fn handle_tray_action(
     config: &Config,
     tray: &Arc<dyn TrayInterface>,
     app_handle: &tauri::AppHandle,
+    login_manager: &LoginManager,
 ) {
     // Create action context for handlers that need full context
     let ctx = ActionContext {
@@ -59,13 +63,17 @@ async fn handle_tray_action(
         TrayAction::OpenFolder => actions::open_folder(config),
         TrayAction::OpenWebUI => actions::open_web_ui(),
         TrayAction::Login => actions::login(&ctx).await,
+        TrayAction::LoginCompleted => actions::login_completed(&ctx).await,
         TrayAction::Logout => actions::logout(&ctx).await,
         TrayAction::TogglePause => actions::toggle_pause(&ctx).await,
         TrayAction::Settings => actions::open_settings(),
         TrayAction::ShowLogs => actions::show_logs(),
         TrayAction::About => actions::show_about(app_handle),
         TrayAction::CheckForUpdates => actions::check_for_updates(app_handle).await,
-        TrayAction::Quit => actions::quit(cli_manager, app_handle).await,
+        TrayAction::Quit => {
+            login_manager.cancel();
+            actions::quit(cli_manager, app_handle).await;
+        }
     }
 }
 
@@ -112,7 +120,11 @@ fn needs_timer_tick(state: SyncState) -> bool {
 /// and does not run Rust destructors, leaving the long-running Filen CLI
 /// orphaned. Tray-menu quits already call the same cleanup path in actions.rs.
 #[cfg(unix)]
-fn install_termination_signal_handler(app_handle: tauri::AppHandle, cli_manager: Arc<CliManager>) {
+fn install_termination_signal_handler(
+    app_handle: tauri::AppHandle,
+    cli_manager: Arc<CliManager>,
+    login_manager: Arc<LoginManager>,
+) {
     tauri::async_runtime::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
 
@@ -136,6 +148,7 @@ fn install_termination_signal_handler(app_handle: tauri::AppHandle, cli_manager:
             _ = sigint.recv() => log::info!("Received SIGINT, shutting down"),
         }
 
+        login_manager.cancel();
         cli_manager.stop_sync().await;
         app_handle.exit(0);
     });
@@ -304,6 +317,8 @@ pub fn run() {
 
     // Create action channel
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<TrayAction>();
+    let login_manager = Arc::new(LoginManager::new());
+    let login_context = LoginCommandContext::new(login_manager.clone(), action_tx.clone());
 
     // Store shared state for the action handler
     let config_clone = config.clone();
@@ -311,7 +326,16 @@ pub fn run() {
     let cli_manager_clone = cli_manager.clone();
 
     tauri::Builder::default()
+        .manage(login_context.clone())
+        .invoke_handler(tauri::generate_handler![
+            login::login_copy,
+            login::start_login,
+            login::submit_two_factor,
+            login::cancel_login,
+            login::close_login
+        ])
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(login::handle_window_event)
         .setup(move |app| {
             // Create the tray icon
             // On Linux with ksni 0.3, the spawn is async, so we need block_on
@@ -327,9 +351,14 @@ pub fn run() {
             let config = config_clone.clone();
             let app_state = app_state_clone.clone();
             let cli_manager = cli_manager_clone.clone();
+            let login_manager = login_manager.clone();
 
             #[cfg(unix)]
-            install_termination_signal_handler(app_handle.clone(), cli_manager.clone());
+            install_termination_signal_handler(
+                app_handle.clone(),
+                cli_manager.clone(),
+                login_manager.clone(),
+            );
 
             // Spawn action handler
             let tray_for_handler = tray.clone();
@@ -337,6 +366,7 @@ pub fn run() {
             let cli_manager_for_handler = cli_manager.clone();
             let config_for_handler = config.clone();
             let app_handle_for_handler = app_handle.clone();
+            let login_manager_for_handler = login_manager.clone();
 
             tauri::async_runtime::spawn(async move {
                 while let Some(action) = action_rx.recv().await {
@@ -347,6 +377,7 @@ pub fn run() {
                         &config_for_handler,
                         &tray_for_handler,
                         &app_handle_for_handler,
+                        &login_manager_for_handler,
                     )
                     .await;
                 }
@@ -471,6 +502,15 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                let login_context = app_handle.state::<LoginCommandContext>();
+                if login_context.should_prevent_exit(code) {
+                    log::info!("Keeping tray app alive after closing login window");
+                    api.prevent_exit();
+                }
+            }
+        });
 }

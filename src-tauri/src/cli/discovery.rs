@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 /// Information about the filen CLI location
+#[derive(Debug, Clone)]
 pub struct FilenCliInfo {
     /// Path to the filen binary
     pub command: String,
