@@ -4,6 +4,10 @@
   "version": "0.1.28",
   "type": "module",
   "scripts": {
+    "check": "npm run check:fmt && npm run check:clippy && npm test",
+    "check:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml",
+    "check:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "tauri": "tauri"
   },
   "devDependencies": {

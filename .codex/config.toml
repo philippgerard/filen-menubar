@@ -1,0 +1,21 @@
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[shell_environment_policy]
+exclude = [
+  "APPLE_*",
+  "AUR_*",
+  "DOCKERHUB_*",
+]
+
+[[hooks.PreToolUse]]
+matcher = "^(Bash|apply_patch|Edit|Write)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'sh "$(git rev-parse --show-toplevel)/.codex/hooks/require-worktree.sh"'
+timeout = 5
+statusMessage = "Checking worktree policy"
