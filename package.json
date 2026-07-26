@@ -1,7 +1,7 @@
 {
   "name": "filen-menubar",
   "private": true,
-  "version": "0.1.28",
+  "version": "0.1.29",
   "type": "module",
   "scripts": {
     "check": "npm run check:fmt && npm run check:clippy && npm test",

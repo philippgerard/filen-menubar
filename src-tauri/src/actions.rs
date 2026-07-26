@@ -11,7 +11,17 @@ use crate::logging;
 use crate::state::{AppState, SyncState};
 use crate::tray::TrayInterface;
 use std::sync::Arc;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+const LOGIN_WINDOW_WIDTH: f64 = 420.0;
+// The packaged macOS window needs extra vertical allowance for its native
+// title bar and WebKit font metrics. Linux keeps the compact KDE-sized dialog.
+const LOGIN_WINDOW_HEIGHT: f64 = if cfg!(target_os = "macos") {
+    475.0
+} else {
+    445.0
+};
 
 /// Context required for executing tray actions
 pub struct ActionContext<'a> {
@@ -38,31 +48,63 @@ pub fn open_web_ui() {
     }
 }
 
-/// Handle login action - check for CLI session and start sync
+/// Handle login action - use an existing session or show the in-app login window
 pub async fn login(ctx: &ActionContext<'_>) {
     log::info!("Login requested");
 
-    // Check if CLI session exists
     if CredentialManager::exists() {
         log::info!("Found Filen CLI session, starting sync");
-        ctx.app_state.set_logged_in(true).await;
-        ctx.tray.set_login_state(Some(true));
-        ctx.tray.update_status(&SyncState::Syncing.status_text());
-
-        if let Err(e) = ctx.cli_manager.start_sync(ctx.config).await {
-            log::error!("Failed to start sync: {}", e);
-            ctx.app_state.set_sync_state(SyncState::Error).await;
-        }
+        start_authenticated_sync(ctx).await;
     } else {
-        log::info!("No Filen CLI session found. Please run 'filen' first to authenticate.");
-        // Tell the user what to do instead of failing silently
-        ctx.app_handle
-            .dialog()
-            .message(rust_i18n::t!("dialog.login_help_message"))
-            .title(rust_i18n::t!("dialog.login_help_title"))
-            .kind(MessageDialogKind::Info)
-            .blocking_show();
+        log::info!("No Filen CLI session found, opening login window");
+        if let Err(error) = open_login_window(ctx.app_handle) {
+            log::error!("Failed to open login window: {error}");
+            ctx.app_handle
+                .dialog()
+                .message(rust_i18n::t!("dialog.login_window_failed_message"))
+                .title(rust_i18n::t!("dialog.login_help_title"))
+                .kind(MessageDialogKind::Error)
+                .blocking_show();
+        }
     }
+}
+
+/// Complete a successful in-app login by starting the normal sync process.
+pub async fn login_completed(ctx: &ActionContext<'_>) {
+    log::info!("In-app login completed");
+    start_authenticated_sync(ctx).await;
+}
+
+async fn start_authenticated_sync(ctx: &ActionContext<'_>) {
+    ctx.app_state.set_logged_in(true).await;
+    ctx.app_state.set_sync_state(SyncState::Scanning).await;
+    ctx.tray.set_login_state(Some(true));
+    ctx.tray.update_status(&SyncState::Scanning.status_text());
+
+    if let Err(error) = ctx.cli_manager.start_sync(ctx.config).await {
+        log::error!("Failed to start sync: {error}");
+        ctx.app_state.set_sync_state(SyncState::Error).await;
+        ctx.tray.update_status(&SyncState::Error.status_text());
+    }
+}
+
+fn open_login_window(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(window) = app_handle.get_webview_window("login") {
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(app_handle, "login", WebviewUrl::App("login.html".into()))
+        .title(rust_i18n::t!("login.window_title"))
+        .inner_size(LOGIN_WINDOW_WIDTH, LOGIN_WINDOW_HEIGHT)
+        .min_inner_size(LOGIN_WINDOW_WIDTH, LOGIN_WINDOW_HEIGHT)
+        .resizable(false)
+        .center()
+        .build()?
+        .set_focus()?;
+
+    Ok(())
 }
 
 /// Handle pause/resume action - pause syncing when active, resume when paused
@@ -318,6 +360,17 @@ mod tests {
             let _: &Config = ctx.config;
             let _: &Arc<dyn TrayInterface> = ctx.tray;
             let _: &tauri::AppHandle = ctx.app_handle;
+        }
+    }
+
+    #[test]
+    fn test_login_window_height_matches_platform() {
+        assert_eq!(LOGIN_WINDOW_WIDTH, 420.0);
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(LOGIN_WINDOW_HEIGHT, 475.0);
+        } else {
+            assert_eq!(LOGIN_WINDOW_HEIGHT, 445.0);
         }
     }
 

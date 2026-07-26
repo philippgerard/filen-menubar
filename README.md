@@ -6,11 +6,13 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 
 ## Features
 
-- **Menubar-only interface** - No windows, just a clean system tray icon
+- **Tray-first interface** - Stays out of the Dock/taskbar; the only app window is the optional sign-in flow
+- **In-app login** - Sign in, complete two-factor authentication, and persist the Filen CLI session without opening a terminal
+- **CLI-owned credentials** - Credentials are sent to the installed CLI through a pseudo-terminal, never through process arguments, environment variables, or application logs
 - **Real-time sync status** - Shows current sync state with live file count updates
 - **Live menu updates** - Menu items update in-place without closing the menu
-- **Cross-platform** - macOS and Linux support
-- **Native KDE support** - Uses StatusNotifierItem (SNI) via ksni for first-class KDE integration
+- **Native platform styling** - A macOS-style login window on macOS and a KDE/Plasma-style window on Linux
+- **Cross-platform tray support** - Tauri's native tray on macOS and StatusNotifierItem (SNI) via `ksni` on Linux
 - **Auto-sync** - Optionally start syncing on launch
 - **Logout confirmation** - Prevents accidental logout with a confirmation dialog
 - **Update check** - Manually check GitHub for a newer release from the tray menu
@@ -19,7 +21,8 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 
 ### Filen CLI
 
-This app wraps the [Filen CLI](https://github.com/FilenCloudDienste/filen-cli). Install it first:
+This app wraps the classic [Filen CLI](https://github.com/FilenCloudDienste/filen-cli)
+and is currently tested with v0.0.36. Install it first:
 
 ```bash
 npm install -g @filen/cli
@@ -31,13 +34,10 @@ Verify installation:
 filen --version
 ```
 
-**Important:** You must login to the Filen CLI before using this app:
-
-```bash
-filen
-```
-
-This opens an interactive session where you can login.
+Filen Menubar can guide you through the Filen CLI login from its tray menu.
+If you prefer not to enter credentials in the app window, run `filen` or
+`filen-cli` in a terminal and answer `y` when asked to keep the session. Filen
+Menubar detects and uses that same saved CLI session.
 
 ### Build Dependencies
 
@@ -163,7 +163,7 @@ sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
 # Clone and build
 git clone https://github.com/philippgerard/filen-menubar.git
 cd filen-menubar
-npm install
+npm ci
 cargo install tauri-cli --version "^2" --locked
 npm run tauri build
 
@@ -193,7 +193,7 @@ git clone https://github.com/philippgerard/filen-menubar.git
 cd filen-menubar
 
 # Install dependencies
-npm install
+npm ci
 
 # Install Tauri CLI
 cargo install tauri-cli --version "^2" --locked
@@ -209,7 +209,7 @@ npm run tauri build
 
 Configuration is stored in a JSON file:
 
-- **macOS:** `~/Library/Application Support/io.filen.menubar/config.json`
+- **macOS:** `~/Library/Application Support/filen-menubar/config.json`
 - **Linux:** `~/.config/filen-menubar/config.json`
 
 ### Options
@@ -222,7 +222,9 @@ Configuration is stored in a JSON file:
   "autoStart": true,
   "locale": "de",
   "loggingEnabled": true,
-  "logLevel": "info"
+  "logLevel": "info",
+  "ignore": ["node_modules", "*.tmp"],
+  "excludeDotFiles": false
 }
 ```
 
@@ -230,11 +232,13 @@ Configuration is stored in a JSON file:
 |--------|-------------|---------|
 | `localPath` | Local folder to sync | `~/Filen` |
 | `remotePath` | Remote Filen path | `/` |
-| `syncMode` | Sync direction: `twoWay`, `localToCloud`, `cloudToLocal` | `twoWay` |
+| `syncMode` | Sync direction: `twoWay`, `localToCloud`, `cloudToLocal`, `localBackup`, or `cloudBackup` | `twoWay` |
 | `autoStart` | Start syncing on app launch | `true` |
 | `locale` | UI language (`en`, `de`). If omitted, uses system locale | System locale |
 | `loggingEnabled` | Enable file logging for debugging | `false` |
 | `logLevel` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` | `info` |
+| `ignore` | File or directory patterns excluded from sync | `[]` |
+| `excludeDotFiles` | Exclude files and directories whose names start with `.` | `false` |
 
 ### Logging
 
@@ -253,9 +257,34 @@ Access logs via the **"Show Logs..."** menu item, or use the helper script:
 
 ## Usage
 
-1. **First:** Login to the Filen CLI by running `filen` and following the prompts
-2. **Launch:** Start the menubar app
-3. **Click "Login..."** in the tray menu to start syncing (uses CLI's stored session)
+1. **Launch:** Start the menubar app
+2. **Click "Login..."** in the tray menu
+3. **Sign in:** Enter your Filen credentials and, when required, your two-factor code
+4. **Sync:** The login window closes and syncing starts automatically
+
+The login window is optional. To authenticate manually instead, close it and
+run `filen` or `filen-cli` in a terminal. Answer `y` when the CLI asks whether
+to keep you logged in, then relaunch Filen Menubar or choose **Login...** again.
+
+### Login Security
+
+The sign-in screen is a local page bundled with Filen Menubar, not a hosted
+Filen website. The app starts the installed Filen CLI in a pseudo-terminal and
+responds to its normal interactive prompts:
+
+- The CLI receives email, password, and two-factor codes through its standard
+  input rather than command-line arguments or environment variables.
+- Rust-side secret buffers are zeroed after use, and credentials are never
+  written to application logs.
+- Filen Menubar answers `y` to the CLI's **Keep me logged in?** prompt. The CLI
+  encrypts the saved session and protects its encryption key with macOS
+  Keychain or the Linux Secret Service.
+- If secure system storage is unavailable, the app refuses the CLI's plaintext-storage fallback.
+
+For two-factor-enabled accounts, Filen may send one failed-login alert followed
+by the successful-login alert. The classic CLI first submits the password to
+learn that a two-factor code is required, then submits the complete login. The
+same behavior occurs during a manual interactive CLI login.
 
 ### Menu Options
 
@@ -281,7 +310,7 @@ Quit                    → Stop syncing and exit
 
 | State | Description |
 |-------|-------------|
-| **Not Logged In** | No CLI session found. Run `filen` to login first. |
+| **Not Logged In** | No CLI session found. Choose **Login...** from the tray menu. |
 | **Synced** | All files are up to date |
 | **Syncing...** | Files are being transferred (shows count) |
 | **Paused** | Sync is paused |
@@ -307,6 +336,11 @@ The tooltip updates in real-time, even while the menu is open.
 │  └────────┬────────┘  └──────────┬──────────┘   │
 │           │                      │              │
 │           └──────────┬───────────┘              │
+│                      │                          │
+│  ┌───────────────────▼──────────────────────┐   │
+│  │       Optional Login Window              │   │
+│  │  local UI → PTY → interactive CLI auth  │   │
+│  └───────────────────┬──────────────────────┘   │
 │                      │                          │
 │  ┌───────────────────▼──────────────────────┐   │
 │  │              App State                    │   │
@@ -345,6 +379,8 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 - **[Rust](https://www.rust-lang.org/)** - Backend logic
 - **[ksni](https://crates.io/crates/ksni)** - Linux StatusNotifierItem (KDE support)
 - **[tokio](https://tokio.rs/)** - Async runtime for subprocess management
+- **[portable-pty](https://crates.io/crates/portable-pty)** - Interactive CLI login without exposing secrets as arguments
+- **[zeroize](https://crates.io/crates/zeroize)** - Clears credentials from memory after use
 - **[tauri-plugin-dialog](https://crates.io/crates/tauri-plugin-dialog)** - Native dialogs
 
 ## Platform Notes
@@ -354,6 +390,7 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 - The app hides from the Dock (menubar-only)
 - Uses Tauri's native TrayIcon with in-place menu updates
 - Template icon support for automatic dark/light mode
+- The optional login window follows macOS typography, spacing, controls, and window sizing
 - Settings open in TextEdit for easy editing
 
 ### Linux (KDE)
@@ -361,6 +398,7 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 - Uses **ksni** for native StatusNotifierItem support
 - First-class KDE Plasma integration
 - No libappindicator fallback issues
+- The optional login window follows KDE/Plasma control and color conventions
 
 ### Linux (GNOME)
 
@@ -369,10 +407,9 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 
 ## Known Limitations
 
-- **CLI Dependency:** The app requires the Filen CLI to be installed and logged in separately
-- **CLI Sunset:** Filen is rewriting their CLI in Rust (expected Q4 2025/Q1 2026). This app will need updates when released.
-- **Login UI:** Currently requires running `filen` in terminal to login. A proper login dialog is planned.
-- **Storage Display:** Not available (CLI v0.0.39 doesn't expose storage quota)
+- **CLI Dependency:** The Filen CLI must be installed; Filen Menubar can handle login after installation.
+- **CLI Migration:** The app currently targets the classic Filen CLI v0.0.36. The Rust rewrite is not yet supported and will require sync integration changes.
+- **Storage Display:** The current CLI integration does not expose account storage quota.
 
 ## Development
 
@@ -404,50 +441,32 @@ The `scripts/` directory contains helper scripts for common tasks:
 ### Manual Commands
 
 ```bash
-# Run with info logging (less verbose)
+# Install the pinned JavaScript dependencies
+npm ci
+
+# Run with info logging
 RUST_LOG=info npm run tauri dev
 
-# Check for issues
-cargo clippy --manifest-path src-tauri/Cargo.toml
+# Formatting, Clippy, and all Rust tests
+npm run check
 
-# Format code
-cargo fmt --manifest-path src-tauri/Cargo.toml
+# Build an unsigned local production bundle
+npm run tauri build
 ```
 
-### Building a Notarized macOS Release
+### Release Pipeline
 
-To build a signed and notarized macOS release locally:
+Application versions must match in `package.json`, `package-lock.json`,
+`src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
+`src-tauri/tauri.conf.json`.
 
-1. **Prerequisites:**
-   - Apple Developer ID Application certificate installed in Keychain
-   - App-specific password from [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords
+Pushing a `v*` tag runs the GitHub Actions release pipeline. It:
 
-2. **Create a `.env` file** (already gitignored):
-
-   ```bash
-   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAM_ID)"
-   export APPLE_ID="your-apple-id@email.com"
-   export APPLE_TEAM_ID="YOUR_TEAM_ID"
-   export APPLE_PASSWORD="xxxx-xxxx-xxxx-xxxx"  # App-specific password
-   ```
-
-3. **Build:**
-
-   ```bash
-   source .env && npm run tauri build -- --target aarch64-apple-darwin
-   ```
-
-4. **Output:** The signed and notarized DMG will be at:
-   ```
-   src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Filen Menubar_<version>_aarch64.dmg
-   ```
-
-5. **Verify notarization:**
-
-   ```bash
-   spctl -a -vvv "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Filen Menubar.app"
-   # Should show: source=Notarized Developer ID
-   ```
+1. Runs the Rust test suite on macOS and Linux.
+2. Builds a signed and notarized Apple Silicon DMG.
+3. Builds Debian, RPM, and Arch Linux packages.
+4. Creates a draft GitHub release containing all artifacts.
+5. Publishes `filen-menubar-bin` to the AUR after the draft release is reviewed and published.
 
 ### Troubleshooting
 
@@ -462,7 +481,12 @@ The `rust_i18n` crate compiles translations at build time. If you modify locale 
 
 ### Project Structure
 
-```
+```text
+src/
+├── login.html         # Optional local sign-in window
+├── login.css          # macOS and KDE/Plasma presentation
+└── login.js           # Login UI state and Tauri commands
+
 src-tauri/
 ├── src/
 │   ├── lib.rs          # Main app setup, action dispatch, status loop
@@ -470,6 +494,7 @@ src-tauri/
 │   ├── cli/            # CLI subprocess management, JSON event parsing
 │   ├── config.rs       # Configuration loading/saving
 │   ├── credentials.rs  # CLI session detection
+│   ├── login.rs        # PTY-driven interactive login and lifecycle handling
 │   ├── state.rs        # Shared app state (sync status, pending count)
 │   ├── update.rs       # GitHub release update check
 │   └── tray/

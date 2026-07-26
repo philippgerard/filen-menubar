@@ -35,7 +35,7 @@ pub mod framer;
 pub mod network;
 pub mod process;
 
-pub use discovery::find_filen_cli;
+pub use discovery::{find_filen_cli, FilenCliInfo};
 pub use events::{CliErrorEvent, CliEvent};
 use framer::{Frame, JsonFramer};
 

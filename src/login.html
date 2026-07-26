@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Log in</title>
+    <link rel="stylesheet" href="/login.css" />
+    <script type="module" src="/login.js" defer></script>
+  </head>
+  <body>
+    <main class="login-shell" aria-live="polite">
+      <section id="credentials-step">
+        <h1 id="title"></h1>
+        <p class="intro" id="intro"></p>
+
+        <form id="credentials-form" novalidate>
+          <label for="email" id="email-label"></label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="username"
+            spellcheck="false"
+            required
+          />
+
+          <label for="password" id="password-label"></label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+
+          <p class="secure-note">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M6.5 8V6.25a3.5 3.5 0 0 1 7 0V8h.75A1.75 1.75 0 0 1 16 9.75v6.5A1.75 1.75 0 0 1 14.25 18h-8.5A1.75 1.75 0 0 1 4 16.25v-6.5A1.75 1.75 0 0 1 5.75 8zm1.75 0h3.5V6.25a1.75 1.75 0 0 0-3.5 0z"
+              />
+            </svg>
+            <span id="persist-note"></span>
+          </p>
+
+          <p class="alternative-note" role="note">
+            <strong id="alternative-title"></strong>
+            <span id="alternative-note"></span>
+          </p>
+
+          <p class="error-message" id="credentials-error" role="alert"></p>
+
+          <div class="actions">
+            <button
+              class="secondary"
+              type="button"
+              data-cancel
+              id="cancel"
+            ></button>
+            <button class="primary" type="submit" id="submit"></button>
+          </div>
+        </form>
+      </section>
+
+      <section id="two-factor-step" hidden>
+        <h1 id="two-factor-title"></h1>
+        <p class="intro" id="two-factor-intro"></p>
+
+        <form id="two-factor-form" novalidate>
+          <label for="two-factor-code" id="two-factor-label"></label>
+          <input
+            id="two-factor-code"
+            name="twoFactorCode"
+            type="text"
+            inputmode="text"
+            autocomplete="one-time-code"
+            spellcheck="false"
+            required
+          />
+
+          <p class="error-message" id="two-factor-error" role="alert"></p>
+
+          <div class="actions">
+            <button class="secondary" type="button" data-cancel id="two-factor-cancel"></button>
+            <button class="primary" type="submit" id="verify"></button>
+          </div>
+        </form>
+      </section>
+
+      <section class="result-state" id="success-step" hidden>
+        <div class="success-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="m5 12.5 4.2 4.2L19 7" />
+          </svg>
+        </div>
+        <h1 id="success"></h1>
+      </section>
+    </main>
+  </body>
+</html>

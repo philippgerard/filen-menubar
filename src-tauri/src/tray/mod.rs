@@ -106,6 +106,8 @@ pub enum TrayAction {
     OpenFolder,
     OpenWebUI,
     Login,
+    /// The in-app login flow persisted a Filen CLI session.
+    LoginCompleted,
     Logout,
     /// Pause syncing when active, resume when paused
     TogglePause,
