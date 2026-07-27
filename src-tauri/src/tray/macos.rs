@@ -1,7 +1,8 @@
 //! macOS tray implementation using Tauri's TrayIcon
 
 use super::{
-    get_pending_text, pause_resume_enabled, pause_resume_label, TrayAction, TrayInterface,
+    get_pending_text, pause_resume_enabled, pause_resume_label, transfer_menu_text, TrayAction,
+    TrayInterface,
 };
 use crate::state::{CurrentTransfer, SyncState};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -274,28 +275,20 @@ impl TrayInterface for MacOsTray {
     fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>) {
         let new_text = transfer.map(|t| t.display_text(25));
 
-        let needs_rebuild = {
+        {
             let mut state = self.state.write().unwrap();
-            let old_had_transfer = state.current_transfer_text.is_some();
-            let new_has_transfer = new_text.is_some();
-
             if state.current_transfer_text != new_text {
                 state.current_transfer_text = new_text.clone();
-                // Need to rebuild menu if transfer item visibility changed
-                old_had_transfer != new_has_transfer
             } else {
                 return; // No change
             }
-        };
-
-        if needs_rebuild {
-            // Transfer started or stopped - rebuild menu to add/remove the item
-            self.rebuild_menu();
-        } else if let Some(text) = new_text {
-            // Just update the text in-place (progress changed)
-            let items = self.menu_items.read().unwrap();
-            let _ = items.transfer_item.set_text(&text);
         }
+
+        // The transfer row is always part of the menu. Mutating its native
+        // NSMenuItem in place lets an open menu remain open between files.
+        let text = transfer_menu_text(new_text.as_deref());
+        let items = self.menu_items.read().unwrap();
+        let _ = items.transfer_item.set_text(&text);
     }
 
     fn update_last_synced(&self, time_text: Option<&str>) {
@@ -352,15 +345,12 @@ fn build_menu(
         .build(app)?;
     builder = builder.item(&pending_item);
 
-    // Current transfer (only added when there's an active transfer)
-    // Menu is rebuilt when transfer starts/stops to add/remove this item
-    let transfer_text = current_transfer_text.unwrap_or("");
-    let transfer_item = MenuItemBuilder::with_id("current_transfer", transfer_text)
+    // Current transfer (always present so live updates never replace an open menu)
+    let transfer_text = transfer_menu_text(current_transfer_text);
+    let transfer_item = MenuItemBuilder::with_id("current_transfer", &transfer_text)
         .enabled(false)
         .build(app)?;
-    if current_transfer_text.is_some() {
-        builder = builder.item(&transfer_item);
-    }
+    builder = builder.item(&transfer_item);
 
     builder = builder.separator();
 

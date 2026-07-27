@@ -1,7 +1,8 @@
 //! Linux tray implementation using ksni for native KDE/freedesktop StatusNotifierItem support
 
 use super::{
-    get_pending_text, pause_resume_enabled, pause_resume_label, TrayAction, TrayInterface,
+    get_pending_text, pause_resume_enabled, pause_resume_label, transfer_menu_text, TrayAction,
+    TrayInterface,
 };
 use crate::state::{CurrentTransfer, SyncState};
 use ksni::{Tray, TrayMethods};
@@ -272,23 +273,14 @@ impl Tray for FilenTray {
                 ..Default::default()
             }
             .into(),
-        ];
-
-        // Current transfer (only shown when there's an active transfer)
-        if let Some(transfer_text) = current_transfer_text {
-            items.push(
-                StandardItem {
-                    label: transfer_text,
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
-            );
-        }
-
-        items.push(MenuItem::Separator);
-
-        items.extend(vec![
+            // Current transfer (always present to keep the D-Bus menu layout stable)
+            StandardItem {
+                label: transfer_menu_text(current_transfer_text.as_deref()),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
             // Open Local Folder (enabled only when logged in)
             StandardItem {
                 label: rust_i18n::t!("menu.open_local_folder").to_string(),
@@ -313,7 +305,7 @@ impl Tray for FilenTray {
             }
             .into(),
             MenuItem::Separator,
-        ]);
+        ];
 
         // Pause/Resume syncing
         items.push(

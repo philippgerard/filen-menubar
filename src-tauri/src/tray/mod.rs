@@ -100,6 +100,17 @@ pub fn pause_resume_label(sync_state: SyncState) -> String {
     }
 }
 
+/// Text for the structurally stable current-transfer menu row.
+///
+/// Native tray menus can be dismissed when their structure is replaced while
+/// open. Keep the row present between transfers and use an idle label instead
+/// of adding/removing it for every file in a batch.
+pub fn transfer_menu_text(current_transfer_text: Option<&str>) -> String {
+    current_transfer_text
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| rust_i18n::t!("menu.no_active_transfer").to_string())
+}
+
 /// Tray menu action
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
@@ -147,9 +158,9 @@ pub trait TrayInterface: Send + Sync {
         self.set_login_state(Some(logged_in));
     }
 
-    /// Update the current transfer display
-    /// - None: No active transfer (hide the menu item)
-    /// - Some(transfer): Show current file being transferred with progress
+    /// Update the current transfer display.
+    /// - None: Show the idle transfer label
+    /// - Some(transfer): Show the current file and progress
     fn update_current_transfer(&self, transfer: Option<&CurrentTransfer>);
 
     /// Update the time of the last successful sync (pre-formatted for display)
@@ -249,5 +260,19 @@ mod tests {
         assert!(pause_resume_enabled(SyncState::Paused, Some(true)));
         assert!(!pause_resume_enabled(SyncState::NotLoggedIn, Some(true)));
         assert!(!pause_resume_enabled(SyncState::CliNotFound, Some(true)));
+    }
+
+    #[test]
+    fn test_transfer_menu_text_uses_current_transfer() {
+        assert_eq!(
+            transfer_menu_text(Some("↑ archive.zip (42%)")),
+            "↑ archive.zip (42%)"
+        );
+    }
+
+    #[test]
+    fn test_transfer_menu_text_uses_localized_idle_label() {
+        rust_i18n::set_locale("en");
+        assert_eq!(transfer_menu_text(None), "No active transfer");
     }
 }

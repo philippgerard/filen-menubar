@@ -9,6 +9,7 @@ menu:
   paused_hint: "Synchronisierung pausiert"
   files_remaining: "%{count} Dateien ausstehend..."
   file_remaining: "1 Datei ausstehend..."
+  no_active_transfer: "Keine aktive Übertragung"
   open_local_folder: "Lokalen Ordner öffnen"
   open_web_ui: "Web-Oberfläche öffnen"
   login: "Anmelden..."
