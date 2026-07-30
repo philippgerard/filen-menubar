@@ -1,13 +1,15 @@
 {
   "name": "filen-menubar",
   "private": true,
-  "version": "0.1.30",
+  "version": "0.1.31",
   "type": "module",
   "scripts": {
-    "check": "npm run check:fmt && npm run check:clippy && npm test",
+    "check": "npm run check:fmt && npm run check:clippy && npm test && npm run test:arch && npm run test:workflows",
     "check:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml",
     "check:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:arch": "bash packaging/arch/render_test.sh",
+    "test:workflows": "bash scripts/workflow_security_test.sh",
     "tauri": "tauri"
   },
   "devDependencies": {

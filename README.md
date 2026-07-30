@@ -460,7 +460,9 @@ Application versions must match in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
 `src-tauri/tauri.conf.json`.
 
-Pushing a `v*` tag runs the GitHub Actions release pipeline. It:
+After creating a reviewed `v*` tag, dispatch the **Release** workflow from
+`main` and enter its numeric version. The workflow rejects tags that are not
+already contained in the selected `main` commit. It then:
 
 1. Runs the Rust test suite on macOS and Linux.
 2. Builds a signed and notarized Apple Silicon DMG.

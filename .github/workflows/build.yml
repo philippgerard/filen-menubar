@@ -1,12 +1,17 @@
-name: Build
+name: Release
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Reviewed release version, e.g. 0.1.30'
+        required: true
+
+# Branch and pull-request builds run in checks.yml, which has no signing or
+# release secrets. Privileged releases must be dispatched from main, and the
+# prepare job proves that the selected tag is already contained in that commit.
+permissions:
+  contents: read
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:
@@ -14,7 +19,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+
+    steps:
+      - name: Checkout trusted release workflow
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Validate reviewed release tag
+        id: release
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="$(bash packaging/arch/validate-version.sh "$INPUT_VERSION")"
+          tag="v${version}"
+          commit="$(git rev-parse --verify "${tag}^{commit}")"
+
+          if ! git merge-base --is-ancestor "$commit" "$GITHUB_SHA"; then
+            echo "release tag ${tag} is not contained in trusted main commit ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$commit" >>"$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
+    if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -30,27 +68,29 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: 'npm'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo dependencies
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
           workspaces: src-tauri -> target
 
       - name: Cache and install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
         with:
           packages: libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
           version: 1.0
@@ -58,8 +98,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Run checks
+        run: npm run check
 
       - name: Import Apple certificate
         if: matrix.platform == 'macos-latest'
@@ -97,7 +137,7 @@ jobs:
         run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Notarize and verify macOS release disk image
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'macos-latest'
+        if: matrix.platform == 'macos-latest'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -142,7 +182,7 @@ jobs:
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.name }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
@@ -150,7 +190,7 @@ jobs:
 
       - name: Upload Linux artifacts
         if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.name }}
           path: |
@@ -160,8 +200,8 @@ jobs:
 
   arch:
     name: Arch package
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, build]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Build where pacman lives, so makepkg and namcap are the real thing.
     #
@@ -181,27 +221,30 @@ jobs:
         run: pacman -Syu --needed --noconfirm git namcap
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
 
       - name: Trust the workspace checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: Linux-x64
           path: linux-artifacts
 
       - name: Render PKGBUILD
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF#refs/tags/v}"
           deb="$(find linux-artifacts -name '*.deb' -print -quit)"
           [[ -n "$deb" ]] || {
             echo "no .deb in the Linux-x64 artifact" >&2
             exit 1
           }
-          packaging/arch/render.sh "$version" "$PWD/archbuild" "$deb"
+          packaging/arch/render.sh "$VERSION" "$PWD/archbuild" "$deb"
           cat archbuild/PKGBUILD
 
       - name: Build package
@@ -222,27 +265,28 @@ jobs:
           namcap archbuild/*.pkg.tar.zst || echo "::warning::namcap flagged the package"
 
       - name: Upload Arch artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Arch-x64
           path: archbuild/*.pkg.tar.zst
           if-no-files-found: error
 
   release:
-    needs: [build, arch]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, build, arch]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
+          tag_name: v${{ needs.prepare.outputs.version }}
           files: artifacts/**/*

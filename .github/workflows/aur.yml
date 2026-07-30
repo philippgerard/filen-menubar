@@ -13,43 +13,56 @@ on:
         description: 'Version to publish, e.g. 0.1.27 (must already be released)'
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   aur:
     name: filen-menubar-bin
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'release' && !github.event.release.prerelease) }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # Always execute the validator and renderer from reviewed main code.
+          ref: main
           # Need every tag: a workflow_dispatch run starts from the default
           # branch and still has to read LICENSE as of v<version>.
           fetch-depth: 0
 
       - name: Resolve version
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
-            version='${{ inputs.version }}'
+          if [[ "$EVENT_NAME" == 'workflow_dispatch' ]]; then
+            raw_version="$INPUT_VERSION"
           else
-            version='${{ github.event.release.tag_name }}'
+            raw_version="$RELEASE_TAG"
           fi
-          version="${version#v}"
-          echo "version=$version" >>"$GITHUB_OUTPUT"
+          version="$(bash packaging/arch/validate-version.sh "$raw_version")"
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
 
       - name: Check out the tagged LICENSE
-        run: git checkout "v${{ steps.version.outputs.version }}" -- LICENSE
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: git checkout "v${VERSION}" -- LICENSE
 
       - name: Render PKGBUILD
         # No local .deb here, so render.sh pulls it from the published release.
         # That is the point: the recorded hash is of the artifact users will
         # actually download.
-        run: packaging/arch/render.sh "${{ steps.version.outputs.version }}" "$PWD/archbuild"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: packaging/arch/render.sh "$VERSION" "$PWD/archbuild"
 
       - name: Publish to the AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v3
+        uses: KSXGitHub/github-actions-deploy-aur@a97f56a8425a7a7f3b8c58607f769c69b089cadb # v3
         with:
           pkgname: filen-menubar-bin
           pkgbuild: ./archbuild/PKGBUILD

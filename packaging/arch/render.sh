@@ -19,13 +19,13 @@ if [[ $# -lt 2 || $# -gt 3 ]]; then
     exit 2
 fi
 
-version="${1#v}"
 outdir="$2"
 local_deb="${3:-}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 template="${repo_root}/packaging/arch/PKGBUILD.in"
 url="https://github.com/philippgerard/filen-menubar"
+version="$(bash "${repo_root}/packaging/arch/validate-version.sh" "$1")"
 
 [[ -f "$template" ]] || { echo "missing template: $template" >&2; exit 1; }
 
@@ -42,8 +42,19 @@ fi
 
 cp -- "${repo_root}/LICENSE" "${outdir}/LICENSE-${version}"
 
-sha_deb="$(sha256sum "$deb_dest" | cut -d' ' -f1)"
-sha_license="$(sha256sum "${outdir}/LICENSE-${version}" | cut -d' ' -f1)"
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        echo "neither sha256sum nor shasum is available" >&2
+        return 1
+    fi
+}
+
+sha_deb="$(sha256_file "$deb_dest")"
+sha_license="$(sha256_file "${outdir}/LICENSE-${version}")"
 
 # Drop the "#@" template notes first, so the placeholder names documented
 # there are not themselves substituted. sed applies -e in order per line.
