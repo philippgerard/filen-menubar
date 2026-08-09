@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title></title>
+    <link rel="stylesheet" href="/activity.css" />
+    <script type="module" src="/activity.js" defer></script>
+  </head>
+  <body>
+    <main class="activity-shell" aria-labelledby="title">
+      <header class="activity-header">
+        <div class="heading-copy">
+          <h1 id="title"></h1>
+          <p id="intro"></p>
+        </div>
+        <button
+          class="toolbar-button"
+          id="clear-button"
+          type="button"
+          aria-controls="clear-confirmation"
+          aria-expanded="false"
+          disabled
+        ></button>
+      </header>
+
+      <section class="activity-controls">
+        <label class="visually-hidden" id="search-label" for="activity-search"></label>
+        <div class="search-control">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.5" cy="8.5" r="5.5"></circle>
+            <path d="m12.5 12.5 4 4"></path>
+          </svg>
+          <input
+            id="activity-search"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="filter-strip" id="activity-filters" role="group">
+          <button class="filter-button" type="button" data-filter="all" aria-pressed="true"></button>
+          <button
+            class="filter-button"
+            type="button"
+            data-filter="uploads"
+            aria-pressed="false"
+          ></button>
+          <button
+            class="filter-button"
+            type="button"
+            data-filter="downloads"
+            aria-pressed="false"
+          ></button>
+          <button
+            class="filter-button"
+            type="button"
+            data-filter="changes"
+            aria-pressed="false"
+          ></button>
+          <button
+            class="filter-button"
+            type="button"
+            data-filter="errors"
+            aria-pressed="false"
+          ></button>
+        </div>
+      </section>
+
+      <section class="activity-content" id="activity-content" aria-busy="true">
+        <div class="state-view" id="loading-state" role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          <p id="loading-label"></p>
+        </div>
+
+        <div class="state-view" id="error-state" role="alert" hidden>
+          <span class="state-mark error-mark" aria-hidden="true"></span>
+          <h2 id="load-failed-title"></h2>
+          <p id="load-failed-description"></p>
+          <button class="secondary-button" id="retry-button" type="button"></button>
+        </div>
+
+        <div class="state-view" id="empty-state" hidden>
+          <span class="state-mark empty-mark" aria-hidden="true"></span>
+          <h2 id="empty-title"></h2>
+          <p id="empty-description"></p>
+        </div>
+
+        <div class="state-view" id="no-results-state" hidden>
+          <span class="state-mark search-mark" aria-hidden="true"></span>
+          <h2 id="no-results-title"></h2>
+          <p id="no-results-description"></p>
+        </div>
+
+        <ol id="activity-list" hidden></ol>
+      </section>
+
+      <footer class="activity-footer">
+        <p id="activity-count" aria-live="polite"></p>
+        <div
+          class="clear-confirmation"
+          id="clear-confirmation"
+          role="group"
+          aria-labelledby="clear-confirm-prompt"
+          hidden
+        >
+          <span id="clear-confirm-prompt"></span>
+          <div class="confirmation-actions">
+            <button class="secondary-button compact-button" id="clear-cancel" type="button"></button>
+            <button class="danger-button compact-button" id="clear-confirm" type="button"></button>
+          </div>
+          <p id="clear-error" role="alert" hidden></p>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>

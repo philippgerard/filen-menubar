@@ -366,6 +366,12 @@ fn build_menu(
         MenuItemBuilder::with_id("open_web_ui", rust_i18n::t!("menu.open_web_ui")).build(app)?;
     builder = builder.item(&open_web_ui);
 
+    // Recent Activity
+    let recent_activity =
+        MenuItemBuilder::with_id("recent_activity", rust_i18n::t!("menu.recent_activity"))
+            .build(app)?;
+    builder = builder.item(&recent_activity);
+
     builder = builder.separator();
 
     // Pause/Resume syncing
@@ -480,6 +486,7 @@ pub fn create_tray(
         let action = match event.id().as_ref() {
             "open_folder" => Some(TrayAction::OpenFolder),
             "open_web_ui" => Some(TrayAction::OpenWebUI),
+            "recent_activity" => Some(TrayAction::RecentActivity),
             "login" => Some(TrayAction::Login),
             "logout" => Some(TrayAction::Logout),
             "pause_resume" => Some(TrayAction::TogglePause),

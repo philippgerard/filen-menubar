@@ -122,6 +122,7 @@ pub enum TrayAction {
     Logout,
     /// Pause syncing when active, resume when paused
     TogglePause,
+    RecentActivity,
     Settings,
     ShowLogs,
     About,

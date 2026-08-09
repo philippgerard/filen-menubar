@@ -257,6 +257,7 @@ impl Tray for FilenTray {
         let state_clone8 = self.state.clone();
         let state_clone9 = self.state.clone();
         let state_clone10 = self.state.clone();
+        let state_clone11 = self.state.clone();
 
         let mut items = vec![
             // Status (disabled, just for display)
@@ -299,6 +300,17 @@ impl Tray for FilenTray {
                 activate: Box::new(move |_| {
                     if let Ok(s) = state_clone2.read() {
                         let _ = s.action_tx.send(TrayAction::OpenWebUI);
+                    }
+                }),
+                ..Default::default()
+            }
+            .into(),
+            // Recent Activity
+            StandardItem {
+                label: rust_i18n::t!("menu.recent_activity").to_string(),
+                activate: Box::new(move |_| {
+                    if let Ok(s) = state_clone11.read() {
+                        let _ = s.action_tx.send(TrayAction::RecentActivity);
                     }
                 }),
                 ..Default::default()
