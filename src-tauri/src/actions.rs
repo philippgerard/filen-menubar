@@ -22,6 +22,14 @@ const LOGIN_WINDOW_HEIGHT: f64 = if cfg!(target_os = "macos") {
 } else {
     445.0
 };
+const ACTIVITY_WINDOW_WIDTH: f64 = 660.0;
+const ACTIVITY_WINDOW_HEIGHT: f64 = if cfg!(target_os = "macos") {
+    560.0
+} else {
+    540.0
+};
+const ACTIVITY_WINDOW_MIN_WIDTH: f64 = 500.0;
+const ACTIVITY_WINDOW_MIN_HEIGHT: f64 = 360.0;
 
 /// Context required for executing tray actions
 pub struct ActionContext<'a> {
@@ -103,6 +111,45 @@ fn open_login_window(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::e
         .center()
         .build()?
         .set_focus()?;
+
+    Ok(())
+}
+
+/// Show the persistent file-operation history in a local app window.
+pub fn show_recent_activity(app_handle: &tauri::AppHandle) {
+    log::info!("Recent activity requested");
+
+    if let Err(error) = open_activity_window(app_handle) {
+        log::error!("Failed to open recent activity window: {error}");
+        app_handle
+            .dialog()
+            .message(rust_i18n::t!("dialog.activity_window_failed_message"))
+            .title(rust_i18n::t!("activity.window_title"))
+            .kind(MessageDialogKind::Error)
+            .blocking_show();
+    }
+}
+
+fn open_activity_window(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(window) = app_handle.get_webview_window("activity") {
+        window.show()?;
+        window.unminimize()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        app_handle,
+        "activity",
+        WebviewUrl::App("activity.html".into()),
+    )
+    .title(rust_i18n::t!("activity.window_title"))
+    .inner_size(ACTIVITY_WINDOW_WIDTH, ACTIVITY_WINDOW_HEIGHT)
+    .min_inner_size(ACTIVITY_WINDOW_MIN_WIDTH, ACTIVITY_WINDOW_MIN_HEIGHT)
+    .resizable(true)
+    .center()
+    .build()?
+    .set_focus()?;
 
     Ok(())
 }
@@ -325,6 +372,9 @@ fn prompt_update_available(app_handle: &tauri::AppHandle, info: &crate::update::
 pub async fn quit(cli_manager: &CliManager, app_handle: &tauri::AppHandle) {
     log::info!("Quit requested");
     cli_manager.stop_sync().await;
+    if let Err(error) = cli_manager.activity_history().flush().await {
+        log::warn!("Failed to flush recent activity before quitting: {error}");
+    }
     app_handle.exit(0);
 }
 
@@ -371,6 +421,19 @@ mod tests {
             assert_eq!(LOGIN_WINDOW_HEIGHT, 475.0);
         } else {
             assert_eq!(LOGIN_WINDOW_HEIGHT, 445.0);
+        }
+    }
+
+    #[test]
+    fn test_activity_window_size_is_resizable_utility_window() {
+        assert_eq!(ACTIVITY_WINDOW_WIDTH, 660.0);
+        assert_eq!(ACTIVITY_WINDOW_MIN_WIDTH, 500.0);
+        assert_eq!(ACTIVITY_WINDOW_MIN_HEIGHT, 360.0);
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(ACTIVITY_WINDOW_HEIGHT, 560.0);
+        } else {
+            assert_eq!(ACTIVITY_WINDOW_HEIGHT, 540.0);
         }
     }
 

@@ -1,4 +1,6 @@
 mod actions;
+pub mod activity;
+mod activity_view;
 mod credentials;
 mod logging;
 mod login;
@@ -12,6 +14,8 @@ pub mod error;
 pub mod state;
 
 use actions::ActionContext;
+use activity::{default_activity_path, ActivityHistory};
+use activity_view::ActivityCommandContext;
 use cli::CliManager;
 use config::Config;
 use credentials::CredentialManager;
@@ -66,6 +70,7 @@ async fn handle_tray_action(
         TrayAction::LoginCompleted => actions::login_completed(&ctx).await,
         TrayAction::Logout => actions::logout(&ctx).await,
         TrayAction::TogglePause => actions::toggle_pause(&ctx).await,
+        TrayAction::RecentActivity => actions::show_recent_activity(app_handle),
         TrayAction::Settings => actions::open_settings(),
         TrayAction::ShowLogs => actions::show_logs(),
         TrayAction::About => actions::show_about(app_handle),
@@ -150,6 +155,9 @@ fn install_termination_signal_handler(
 
         login_manager.cancel();
         cli_manager.stop_sync().await;
+        if let Err(error) = cli_manager.activity_history().flush().await {
+            log::warn!("Failed to flush recent activity during shutdown: {error}");
+        }
         app_handle.exit(0);
     });
 }
@@ -313,21 +321,39 @@ pub fn run() {
     // receiver only sees changes made after subscription, so subscribing
     // inside the (later-spawned) status loop could miss startup transitions
     let state_rx = app_state.subscribe();
-    let cli_manager = Arc::new(CliManager::new(app_state.clone()));
+    let activity_history = Arc::new(match default_activity_path() {
+        Some(path) => ActivityHistory::load_or_empty(path),
+        None => {
+            log::warn!(
+                "No application data directory is available; recent activity will not persist"
+            );
+            ActivityHistory::in_memory()
+        }
+    });
+    let cli_manager = Arc::new(CliManager::with_activity(
+        app_state.clone(),
+        activity_history.clone(),
+    ));
 
     // Create action channel
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<TrayAction>();
     let login_manager = Arc::new(LoginManager::new());
     let login_context = LoginCommandContext::new(login_manager.clone(), action_tx.clone());
+    let activity_context = ActivityCommandContext::new(activity_history.clone());
 
     // Store shared state for the action handler
     let config_clone = config.clone();
     let app_state_clone = app_state.clone();
     let cli_manager_clone = cli_manager.clone();
+    let activity_history_clone = activity_history.clone();
 
     tauri::Builder::default()
         .manage(login_context.clone())
+        .manage(activity_context)
         .invoke_handler(tauri::generate_handler![
+            activity_view::activity_copy,
+            activity_view::recent_activity,
+            activity_view::clear_activity,
             login::login_copy,
             login::start_login,
             login::submit_two_factor,
@@ -335,7 +361,10 @@ pub fn run() {
             login::close_login
         ])
         .plugin(tauri_plugin_dialog::init())
-        .on_window_event(login::handle_window_event)
+        .on_window_event(|window, event| {
+            login::handle_window_event(window, event);
+            activity_view::handle_window_event(window, event);
+        })
         .setup(move |app| {
             // Create the tray icon
             // On Linux with ksni 0.3, the spawn is async, so we need block_on
@@ -352,6 +381,11 @@ pub fn run() {
             let app_state = app_state_clone.clone();
             let cli_manager = cli_manager_clone.clone();
             let login_manager = login_manager.clone();
+            let activity_history = activity_history_clone.clone();
+            // Subscribe before any startup sync can emit activity so neither
+            // persistence nor an open window can miss the first mutation.
+            let activity_persist_rx = activity_history.subscribe();
+            let activity_window_rx = activity_history.subscribe();
 
             #[cfg(unix)]
             install_termination_signal_handler(
@@ -359,6 +393,15 @@ pub fn run() {
                 cli_manager.clone(),
                 login_manager.clone(),
             );
+
+            tauri::async_runtime::spawn(activity_view::persist_activity_updates(
+                activity_history.clone(),
+                activity_persist_rx,
+            ));
+            tauri::async_runtime::spawn(activity_view::forward_activity_updates(
+                activity_window_rx,
+                app_handle.clone(),
+            ));
 
             // Spawn action handler
             let tray_for_handler = tray.clone();

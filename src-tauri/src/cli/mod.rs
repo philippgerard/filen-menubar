@@ -36,13 +36,14 @@ pub mod network;
 pub mod process;
 
 pub use discovery::{find_filen_cli, FilenCliInfo};
-pub use events::{CliErrorEvent, CliEvent};
+pub use events::{CliErrorEvent, CliEvent, TransferData};
 use framer::{Frame, JsonFramer};
 
 // Re-export process types for dependency injection (currently unused, for future testability)
 #[allow(unused_imports)]
 pub use process::{ProcessHandle, ProcessRunner, TokioProcessRunner};
 
+use crate::activity::ActivityHistory;
 use crate::config::Config;
 use crate::error::CliError;
 use crate::state::{AppState, CurrentTransfer, StorageInfo, SyncState, TransferDirection};
@@ -55,8 +56,35 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
 
-/// Handle a parsed CLI event and update app state accordingly
-async fn handle_cli_event(state: &AppState, event: CliEvent) {
+/// Whether an operation name identifies a canonical sync task rather than a
+/// lower-level upload/download progress event.
+fn is_task_operation(operation: Option<&str>) -> bool {
+    matches!(
+        operation,
+        Some(
+            "uploadFile"
+                | "downloadFile"
+                | "createLocalDirectory"
+                | "createRemoteDirectory"
+                | "deleteLocalDirectory"
+                | "deleteLocalFile"
+                | "deleteRemoteDirectory"
+                | "deleteRemoteFile"
+                | "renameLocalDirectory"
+                | "renameLocalFile"
+                | "renameRemoteDirectory"
+                | "renameRemoteFile"
+        )
+    )
+}
+
+/// Handle a parsed CLI event and update app state accordingly.
+///
+/// The CLI emits two completion events for file copies: a low-level
+/// `upload`/`download` event with `type="finished"`, followed by the canonical
+/// `uploadFile`/`downloadFile` task event with `type="success"`. Only canonical
+/// task events affect the pending count and activity history.
+async fn handle_cli_event(state: &AppState, activity: &ActivityHistory, event: CliEvent) {
     match event {
         CliEvent::CycleStarted => {
             // Don't set syncing on cycleStarted - cycles run frequently even when idle
@@ -107,17 +135,26 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
         }
         CliEvent::Transfer { data } => {
             if let Some(ref transfer_data) = data {
+                let operation = transfer_data.operation.as_deref();
+                let transfer_type = transfer_data.transfer_type.as_deref();
+                let is_task = is_task_operation(operation);
+                if is_task && matches!(transfer_type, Some("success" | "error")) {
+                    // Do not content-deduplicate task events: the same path may
+                    // legitimately be changed more than once in one cycle.
+                    let _ = activity.record_transfer(transfer_data);
+                }
+
                 // Determine direction for all transfer types
-                let direction = match transfer_data.operation.as_deref() {
+                let direction = match operation {
                     Some("upload") | Some("uploadFile") => Some(TransferDirection::Upload),
                     Some("download") | Some("downloadFile") => Some(TransferDirection::Download),
                     _ => None, // createRemoteDirectory, etc. don't show indicator
                 };
 
-                // Check if this transfer completed successfully
-                if transfer_data.transfer_type.as_deref() == Some("success")
-                    || transfer_data.transfer_type.as_deref() == Some("finished")
-                {
+                // Only task-level success is a completed sync action. Raw
+                // upload/download `finished` events are progress lifecycle
+                // signals and are followed by uploadFile/downloadFile success.
+                if is_task && transfer_type == Some("success") {
                     let current = state.get_pending_count().await;
                     if current > 0 {
                         let new_count = current - 1;
@@ -126,9 +163,17 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
                     }
                     // Clear current transfer when this file is done
                     state.set_current_transfer(None).await;
-                } else if transfer_data.transfer_type.as_deref() == Some("started")
-                    || transfer_data.transfer_type.as_deref() == Some("progress")
-                    || transfer_data.transfer_type.as_deref() == Some("queued")
+                } else if is_task && transfer_type == Some("error") {
+                    state.set_current_transfer(None).await;
+                } else if matches!(operation, Some("upload" | "download"))
+                    && matches!(transfer_type, Some("finished" | "success" | "error"))
+                {
+                    // Clear the live progress indicator, but do not decrement
+                    // or record: a canonical task terminal event follows.
+                    state.set_current_transfer(None).await;
+                } else if transfer_type == Some("started")
+                    || transfer_type == Some("progress")
+                    || transfer_type == Some("queued")
                 {
                     // Update current transfer info (only for actual file transfers)
                     if let (Some(dir), Some(path)) = (direction, &transfer_data.relative_path) {
@@ -153,7 +198,7 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
                         );
                         state.set_current_transfer(Some(transfer)).await;
                     }
-                } else if transfer_data.transfer_type.as_deref() == Some("error") {
+                } else if transfer_type == Some("error") {
                     // Clear current transfer on error
                     state.set_current_transfer(None).await;
                 }
@@ -171,17 +216,9 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
             }
         }
         CliEvent::Success { .. } => {
-            // Note: Success events are typically embedded in Transfer events as data.type="success"
-            // This handles any standalone success events
-            let current = state.get_pending_count().await;
-            if current > 0 {
-                let new_count = current - 1;
-                log::debug!(
-                    "Transfer complete (standalone), {} files remaining",
-                    new_count
-                );
-                state.set_pending_count(new_count).await;
-            }
+            // Legacy standalone success events do not identify which canonical
+            // task completed. Only task-level Transfer success events decrement
+            // the pending count or enter activity history.
         }
         CliEvent::Unknown => {
             // Ignore unknown event types
@@ -189,12 +226,12 @@ async fn handle_cli_event(state: &AppState, event: CliEvent) {
     }
 }
 
-async fn handle_cli_frames(state: &AppState, frames: Vec<Frame>) {
+async fn handle_cli_frames(state: &AppState, activity: &ActivityHistory, frames: Vec<Frame>) {
     for frame in frames {
         match frame {
             Frame::Json(complete_json) => match serde_json::from_str::<CliEvent>(&complete_json) {
                 Ok(event) => {
-                    handle_cli_event(state, event).await;
+                    handle_cli_event(state, activity, event).await;
                 }
                 Err(e) => {
                     log::debug!(
@@ -266,6 +303,7 @@ fn text_preview(text: &str, max_chars: usize) -> String {
 pub struct CliManager {
     process: Arc<RwLock<Option<Child>>>,
     state: AppState,
+    activity: Arc<ActivityHistory>,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
     /// Set while the app itself is stopping the CLI (pause, logout, quit, restart).
     /// The output monitors check this so an intentional kill is not reported as
@@ -275,12 +313,22 @@ pub struct CliManager {
 
 impl CliManager {
     pub fn new(state: AppState) -> Self {
+        Self::with_activity(state, Arc::new(ActivityHistory::in_memory()))
+    }
+
+    pub fn with_activity(state: AppState, activity: Arc<ActivityHistory>) -> Self {
         Self {
             process: Arc::new(RwLock::new(None)),
             state,
+            activity,
             shutdown_tx: Arc::new(RwLock::new(None)),
             stopping: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Activity history receiving canonical task events from this manager.
+    pub fn activity_history(&self) -> &ActivityHistory {
+        self.activity.as_ref()
     }
 
     /// Check if filen CLI is installed (single attempt)
@@ -433,6 +481,7 @@ impl CliManager {
 
         // Spawn output monitoring task
         let state = self.state.clone();
+        let activity = self.activity.clone();
         let stopping = self.stopping.clone();
         tokio::spawn(async move {
             if let Some(stdout) = stdout {
@@ -455,14 +504,14 @@ impl CliManager {
                             if let Some(text) = take_valid_utf8(&mut pending) {
                                 log::debug!("Read {} bytes from CLI stdout", bytes_read);
                                 let frames = framer.push_chunk(&text);
-                                handle_cli_frames(&state, frames).await;
+                                handle_cli_frames(&state, &activity, frames).await;
                             }
                         }
                         Ok(_) | Err(_) => {
                             if !pending.is_empty() {
                                 let text = String::from_utf8_lossy(&pending).into_owned();
                                 let frames = framer.push_chunk(&text);
-                                handle_cli_frames(&state, frames).await;
+                                handle_cli_frames(&state, &activity, frames).await;
                             }
 
                             // EOF or read error - process exited
@@ -613,7 +662,21 @@ impl CliManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{take_valid_utf8, text_preview};
+    use super::{handle_cli_event, take_valid_utf8, text_preview, CliEvent, TransferData};
+    use crate::activity::ActivityHistory;
+    use crate::state::{AppState, CurrentTransfer, TransferDirection};
+
+    fn transfer_event(operation: &str, transfer_type: &str) -> CliEvent {
+        CliEvent::Transfer {
+            data: Some(TransferData {
+                operation: Some(operation.to_string()),
+                transfer_type: Some(transfer_type.to_string()),
+                relative_path: Some("documents/report.pdf".to_string()),
+                bytes: None,
+                size: Some(1024),
+            }),
+        }
+    }
 
     #[test]
     fn utf8_extraction_retains_incomplete_character() {
@@ -648,5 +711,66 @@ mod tests {
         // The old 100-byte slice ended in the middle of `é`.
         let text = format!("{}é-tail", "a".repeat(99));
         assert_eq!(text_preview(&text, 100), format!("{}é", "a".repeat(99)));
+    }
+
+    #[tokio::test]
+    async fn raw_finished_clears_progress_without_counting_or_recording_twice() {
+        let state = AppState::new();
+        state.set_pending_count(2).await;
+        state
+            .set_current_transfer(Some(CurrentTransfer::new(
+                TransferDirection::Upload,
+                "report.pdf".to_string(),
+                1024,
+            )))
+            .await;
+        let activity = ActivityHistory::in_memory();
+
+        handle_cli_event(&state, &activity, transfer_event("upload", "finished")).await;
+
+        assert_eq!(state.get_pending_count().await, 2);
+        assert!(state.get_current_transfer().await.is_none());
+        assert!(activity.snapshot_newest_first().is_empty());
+
+        handle_cli_event(&state, &activity, transfer_event("uploadFile", "success")).await;
+
+        assert_eq!(state.get_pending_count().await, 1);
+        assert_eq!(activity.snapshot_newest_first().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn task_error_is_recorded_without_decrementing_pending_count() {
+        let state = AppState::new();
+        state.set_pending_count(1).await;
+        let activity = ActivityHistory::in_memory();
+
+        handle_cli_event(
+            &state,
+            &activity,
+            transfer_event("deleteRemoteFile", "error"),
+        )
+        .await;
+
+        assert_eq!(state.get_pending_count().await, 1);
+        assert_eq!(activity.snapshot_newest_first().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn standalone_success_does_not_decrement_pending_count() {
+        let state = AppState::new();
+        state.set_pending_count(1).await;
+        let activity = ActivityHistory::in_memory();
+
+        handle_cli_event(
+            &state,
+            &activity,
+            CliEvent::Success {
+                path: Some("documents/report.pdf".to_string()),
+            },
+        )
+        .await;
+
+        assert_eq!(state.get_pending_count().await, 1);
+        assert!(activity.snapshot_newest_first().is_empty());
     }
 }

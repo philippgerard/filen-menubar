@@ -11,6 +11,7 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 - **CLI-owned credentials** - Credentials are sent to the installed CLI through a pseudo-terminal, never through process arguments, environment variables, or application logs
 - **Real-time sync status** - Shows current sync state with live file count updates
 - **Live menu updates** - Menu items update in-place without closing the menu
+- **Recent activity** - Review the latest uploads, downloads, removals, and other file operations
 - **Native platform styling** - A macOS-style login window on macOS and a KDE/Plasma-style window on Linux
 - **Cross-platform tray support** - Tauri's native tray on macOS and StatusNotifierItem (SNI) via `ksni` on Linux
 - **Auto-sync** - Optionally start syncing on launch
@@ -255,6 +256,16 @@ Access logs via the **"Show Logs..."** menu item, or use the helper script:
 ./scripts/logs.sh
 ```
 
+### Recent Activity
+
+The **"Recent Activity..."** window retains the newest 500 file operations
+observed by this client, including uploads, downloads, directory changes,
+removals, renames, and failed operations. Only paths relative to the configured
+sync root are stored. Use **Clear** in the activity window to remove the history.
+
+- **macOS:** `~/Library/Application Support/filen-menubar/activity-history.json`
+- **Linux:** `~/.local/share/filen-menubar/activity-history.json`
+
 ## Usage
 
 1. **Launch:** Start the menubar app
@@ -294,6 +305,7 @@ Up to date              ← Shows "X files remaining..." when syncing
 ─────────────
 Open Local Folder       → Opens your local sync folder in Finder/file manager
 Open Web UI             → Opens Filen web interface in browser
+Recent Activity...      → Shows the latest file operations performed by this client
 ─────────────
 Pause Syncing           → Pause/resume syncing (label toggles with state)
 Logout                  → Stop sync and clear session (with confirmation)
@@ -369,7 +381,7 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 |-------|-------------|
 | `cycleProcessingTasksStarted` | Sync cycle starting, set state to Syncing |
 | `deltasCount` | Number of files to sync |
-| `transfer` + `success` | A file completed, decrement pending count |
+| task-level `transfer` + `success`/`error` | A file operation completed; update pending count and recent activity |
 | `cycleSuccess` | Sync cycle completed, set state to Synced |
 | `cycleError` | Sync cycle failed, set state to Error |
 
@@ -390,7 +402,7 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 - The app hides from the Dock (menubar-only)
 - Uses Tauri's native TrayIcon with in-place menu updates
 - Template icon support for automatic dark/light mode
-- The optional login window follows macOS typography, spacing, controls, and window sizing
+- The login and Recent Activity windows follow macOS typography, spacing, controls, and window sizing
 - Settings open in TextEdit for easy editing
 
 ### Linux (KDE)
@@ -398,7 +410,7 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 - Uses **ksni** for native StatusNotifierItem support
 - First-class KDE Plasma integration
 - No libappindicator fallback issues
-- The optional login window follows KDE/Plasma control and color conventions
+- The login and Recent Activity windows follow KDE/Plasma control and color conventions
 
 ### Linux (GNOME)
 
