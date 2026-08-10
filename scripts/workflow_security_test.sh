@@ -63,6 +63,19 @@ if [[ "$(grep -Fc 'run: npm run check' "$build_workflow")" -ne 1 ]] ||
     exit 1
 fi
 
+if grep -R -Fq 'awalsh128/cache-apt-pkgs-action' "${repo_root}/.github/workflows"; then
+    echo "Linux dependencies must fail fast instead of using the lossy APT cache action" >&2
+    exit 1
+fi
+
+for workflow in "$build_workflow" "$checks_workflow"; do
+    if [[ "$(grep -Fc 'sudo apt-get -o Acquire::Retries=3 update' "$workflow")" -ne 1 ]] ||
+        [[ "$(grep -Fc 'sudo apt-get -o Acquire::Retries=3 install -y' "$workflow")" -ne 1 ]]; then
+        echo "Linux workflows must refresh package lists and install dependencies explicitly" >&2
+        exit 1
+    fi
+done
+
 if grep -Eq '\$\{\{[[:space:]]*secrets\.|APPLE_|AUR_SSH_PRIVATE_KEY|DOCKERHUB_' \
     "$checks_workflow"; then
     echo "branch and pull-request workflow must remain secretless" >&2
@@ -135,7 +148,6 @@ assert_action_pinned() {
 
 assert_action_pinned dtolnay/rust-toolchain
 assert_action_pinned swatinem/rust-cache
-assert_action_pinned awalsh128/cache-apt-pkgs-action
 assert_action_pinned softprops/action-gh-release
 assert_action_pinned KSXGitHub/github-actions-deploy-aur
 
