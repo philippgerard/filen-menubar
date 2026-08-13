@@ -32,7 +32,7 @@ status:
   syncing: "Syncing"
   paused: "Paused"
   error: "Sync Error"
-  cli_not_found: "CLI Not Found"
+  cli_not_found: "Sync Backend Missing"
   offline: "Offline"
 
 # Tooltips
@@ -70,8 +70,8 @@ login:
   password_label: "Password"
   password_placeholder: "Enter your password"
   persist_note: "Your session will be encrypted by the Filen CLI and protected with your system keychain."
-  alternative_title: "This window is optional"
-  alternative_note: "Alternatively, close it and run “filen” or “filen-cli” in a terminal. Answer “y” when asked to keep the session; Filen Menubar will use that saved login."
+  alternative_title: "Bundled sign-in"
+  alternative_note: "Sign-in runs locally through the bundled Filen CLI. No separate CLI installation or terminal step is required."
   submit: "Log in"
   cancel: "Cancel"
   authenticating: "Logging in..."

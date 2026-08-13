@@ -4,16 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Reviewed release version, e.g. 0.1.30'
+        description: 'Reviewed release version, e.g. 0.1.33'
         required: true
 
-# Branch and pull-request builds run in checks.yml, which has no signing or
-# release secrets. Privileged releases must be dispatched from main, and the
-# prepare job proves that the selected tag is already contained in that commit.
 permissions:
   contents: read
 
-# Cancel in-progress runs when a new run is triggered
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,7 +21,6 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       commit: ${{ steps.release.outputs.commit }}
-
     steps:
       - name: Checkout trusted release workflow
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -41,14 +36,12 @@ jobs:
           version="$(bash packaging/arch/validate-version.sh "$INPUT_VERSION")"
           tag="v${version}"
           commit="$(git rev-parse --verify "${tag}^{commit}")"
-
-          if ! git merge-base --is-ancestor "$commit" "$GITHUB_SHA"; then
+          git merge-base --is-ancestor "$commit" "$GITHUB_SHA" || {
             echo "release tag ${tag} is not contained in trusted main commit ${GITHUB_SHA}" >&2
             exit 1
-          fi
-
-          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
-          printf 'commit=%s\n' "$commit" >>"$GITHUB_OUTPUT"
+          }
+          bash scripts/check-version-sync.sh "$version" "$commit"
+          printf 'version=%s\ncommit=%s\n' "$version" "$commit" >>"$GITHUB_OUTPUT"
 
   build:
     needs: prepare
@@ -63,20 +56,30 @@ jobs:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             name: Linux-x64
-
     runs-on: ${{ matrix.platform }}
-
     steps:
-      - name: Checkout
+      - name: Checkout reviewed release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.prepare.outputs.commit }}
 
+      - name: Verify native build host
+        if: matrix.platform == 'macos-latest'
+        run: test "$(uname -m)" = arm64
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Verify Bun revision
+        run: test "$(bun --revision)" = "1.3.14+0d9b296af"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -94,21 +97,33 @@ jobs:
           set -euo pipefail
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get -o Acquire::Retries=3 install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+            libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libdbus-1-dev pkg-config binutils rpm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Run checks
+      - name: Run release gates
         run: npm run check
+
+      - name: Package and smoke-rebuild corresponding source
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(bash scripts/package-filen-cli-source.sh)"
+          extracted="$RUNNER_TEMP/corresponding-source"
+          mkdir -p "$extracted"
+          tar -xzf "$archive" -C "$extracted"
+          source_root="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          NODE_BIN="$PWD/src-tauri/generated/filen-cli-node" \
+            BUN_BIN="$(command -v bun)" \
+            "$source_root/rebuild-source.sh" "$RUNNER_TEMP/rebuilt-helper"
+          cp "$archive" "$RUNNER_TEMP/"
+          cp src-tauri/generated/licenses/filen-cli/runtime.cdx.json \
+            "$RUNNER_TEMP/filen-menubar-cli-${{ matrix.target }}-runtime.cdx.json"
+          cp src-tauri/generated/licenses/filen-cli/THIRD_PARTY_NOTICES.txt \
+            "$RUNNER_TEMP/filen-menubar-cli-${{ matrix.target }}-THIRD_PARTY_NOTICES.txt"
 
       - name: Import Apple certificate
         if: matrix.platform == 'macos-latest'
@@ -117,26 +132,69 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
-
-          # Create temporary keychain
           keychain_path="$RUNNER_TEMP/app-signing.keychain-db"
           keychain_password="$(openssl rand -base64 32)"
           certificate_path="$RUNNER_TEMP/certificate.p12"
-
-          # Decode certificate
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$certificate_path"
-
-          # Create and configure keychain
           security create-keychain -p "$keychain_password" "$keychain_path"
           security set-keychain-settings -lut 21600 "$keychain_path"
           security unlock-keychain -p "$keychain_password" "$keychain_path"
-
-          # Import certificate
           security import "$certificate_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
           security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain_path"
           security list-keychain -d user -s "$keychain_path"
 
-      - name: Build Tauri app (macOS with signing)
+      - name: Sign native addon and Node helper
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Philipp Gérard (7WS855G6D3)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          addon="src-tauri/generated/filen-cli/node_modules/@jupiterpi/node-keyring/node-keyring.darwin-arm64.node"
+          helper="src-tauri/generated/filen-cli-node"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
+            --identifier io.filen.menubar.filen-cli.keyring \
+            --options runtime --timestamp "$addon"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
+            --identifier io.filen.menubar.filen-cli \
+            --options runtime --timestamp \
+            --entitlements src-tauri/filen-cli.entitlements "$helper"
+          codesign --verify --strict --verbose=4 "$addon"
+          codesign --verify --strict --verbose=4 "$helper"
+          for file in "$addon" "$helper"; do
+            signature="$(codesign -dv --verbose=4 "$file" 2>&1)"
+            grep -Fq 'TeamIdentifier=7WS855G6D3' <<<"$signature"
+            grep -Fq 'flags=0x10000(runtime)' <<<"$signature"
+            entitlements="$(codesign -d --entitlements :- "$file" 2>&1 || true)"
+            for forbidden in \
+              com.apple.security.cs.allow-unsigned-executable-memory \
+              com.apple.security.cs.disable-executable-page-protection \
+              com.apple.security.cs.disable-library-validation; do
+              if grep -Fq "$forbidden" <<<"$entitlements"; then
+                echo "$file unexpectedly has code-signing exception: $forbidden" >&2
+                exit 1
+              fi
+            done
+          done
+          helper_entitlements="$(codesign -d --entitlements :- "$helper" 2>&1)"
+          grep -Fq 'com.apple.security.cs.allow-jit' <<<"$helper_entitlements"
+          helper_entitlement_keys="$(codesign -d --entitlements :- --xml "$helper" 2>/dev/null | \
+            plutil -convert json -o - - | \
+            python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')"
+          [[ "$helper_entitlement_keys" == 'com.apple.security.cs.allow-jit' ]]
+          addon_entitlements="$(codesign -d --entitlements :- "$addon" 2>&1 || true)"
+          if grep -Fq '<key>' <<<"$addon_entitlements"; then
+            echo "native addon unexpectedly has entitlements" >&2
+            exit 1
+          fi
+          (
+            cd src-tauri/generated/filen-cli
+            "$OLDPWD/$helper" -e \
+              'const keyring = require("@jupiterpi/node-keyring"); if (typeof keyring.getPassword !== "function") process.exit(1)'
+          )
+          "$helper" -e 'if (typeof WebAssembly !== "object") process.exit(1)'
+
+      - name: Build signed Tauri app
         if: matrix.platform == 'macos-latest'
         env:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Philipp Gérard (7WS855G6D3)"
@@ -145,56 +203,139 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target ${{ matrix.target }}
 
-      - name: Notarize and verify macOS release disk image
+      - name: Verify and notarize macOS release
         if: matrix.platform == 'macos-latest'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-
-          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"
+          app_path="$PWD/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"
+          helper_path="$app_path/Contents/Helpers/filen-menubar-cli"
+          host_path="$app_path/Contents/MacOS/filen-menubar"
+          runtime_path="$app_path/Contents/Resources/filen-cli"
+          addon_path="$runtime_path/node_modules/@jupiterpi/node-keyring/node-keyring.darwin-arm64.node"
           dmg_files=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
-
-          [[ -d "$app_path" ]] || {
-            echo "macOS application bundle was not produced" >&2
-            exit 1
-          }
-          [[ "${#dmg_files[@]}" -eq 1 ]] || {
-            echo "expected exactly one macOS disk image" >&2
-            exit 1
-          }
+          [[ -d "$app_path" && "${#dmg_files[@]}" -eq 1 ]]
           dmg_path="${dmg_files[0]}"
-
           codesign --verify --deep --strict --verbose=4 "$app_path"
+          codesign --verify --strict --verbose=4 "$helper_path"
+          codesign --verify --strict --verbose=4 "$addon_path"
+          helper_signature="$(codesign -dv --verbose=4 "$helper_path" 2>&1)"
+          addon_signature="$(codesign -dv --verbose=4 "$addon_path" 2>&1)"
+          host_signature="$(codesign -dv --verbose=4 "$host_path" 2>&1)"
+          grep -Fq 'Identifier=io.filen.menubar.filen-cli' <<<"$helper_signature"
+          grep -Fq 'Identifier=io.filen.menubar.filen-cli.keyring' <<<"$addon_signature"
+          grep -Fq 'TeamIdentifier=7WS855G6D3' <<<"$helper_signature"
+          grep -Fq 'TeamIdentifier=7WS855G6D3' <<<"$addon_signature"
+          grep -Fq 'TeamIdentifier=7WS855G6D3' <<<"$host_signature"
+          grep -Fq 'flags=0x10000(runtime)' <<<"$helper_signature"
+          grep -Fq 'flags=0x10000(runtime)' <<<"$addon_signature"
+          grep -Fq 'flags=0x10000(runtime)' <<<"$host_signature"
+          for file in "$helper_path" "$addon_path" "$host_path"; do
+            entitlements="$(codesign -d --entitlements :- "$file" 2>&1 || true)"
+            for forbidden in \
+              com.apple.security.cs.allow-unsigned-executable-memory \
+              com.apple.security.cs.disable-executable-page-protection \
+              com.apple.security.cs.disable-library-validation; do
+              if grep -Fq "$forbidden" <<<"$entitlements"; then
+                echo "$file unexpectedly has code-signing exception: $forbidden" >&2
+                exit 1
+              fi
+            done
+          done
+          helper_entitlements="$(codesign -d --entitlements :- "$helper_path" 2>&1)"
+          grep -Fq 'com.apple.security.cs.allow-jit' <<<"$helper_entitlements"
+          helper_entitlement_keys="$(codesign -d --entitlements :- --xml "$helper_path" 2>/dev/null | \
+            plutil -convert json -o - - | \
+            python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')"
+          [[ "$helper_entitlement_keys" == 'com.apple.security.cs.allow-jit' ]]
+          for file in "$addon_path" "$host_path"; do
+            entitlements="$(codesign -d --entitlements :- "$file" 2>&1 || true)"
+            if grep -Fq '<key>' <<<"$entitlements"; then
+              echo "$file unexpectedly has entitlements" >&2
+              exit 1
+            fi
+          done
+          helper_version="$(tr -d '\r\n' < third-party/filen-cli/VERSION)"
+          [[ "$(NO_COLOR=1 "$helper_path" --disable-warning=DEP0169 \
+            "$runtime_path/filen-cli.cjs" --skip-update --data-dir "$RUNNER_TEMP/filen-data" --version)" == \
+            "Filen CLI ${helper_version}" ]]
+          (
+            cd "$runtime_path"
+            "$helper_path" -e \
+              'const keyring = require("@jupiterpi/node-keyring"); if (typeof keyring.getPassword !== "function") process.exit(1)'
+          )
+          for file in NODE-LICENSE.txt THIRD_PARTY_NOTICES.txt runtime.cdx.json; do
+            [[ -s "$app_path/Contents/Resources/licenses/filen-cli/$file" ]]
+          done
           xcrun stapler validate "$app_path"
           spctl --assess --type execute --verbose=4 "$app_path"
-
           codesign --verify --verbose=4 "$dmg_path"
           xcrun notarytool submit "$dmg_path" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple "$dmg_path"
           xcrun stapler validate "$dmg_path"
-          spctl --assess --type open \
-            --context context:primary-signature \
-            --verbose=4 \
-            "$dmg_path"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
 
-      - name: Build Tauri app (Linux)
+      - name: Build Linux packages
         if: matrix.platform == 'ubuntu-22.04'
         run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Verify Linux release payload and ABI floor
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/deb" -name '*.deb' -print -quit)"
+          rpm="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/rpm" -name '*.rpm' -print -quit)"
+          [[ -n "$deb" && -n "$rpm" ]]
+          root="$RUNNER_TEMP/deb-root"
+          mkdir -p "$root"
+          dpkg-deb -x "$deb" "$root"
+          runtime="$root/usr/lib/Filen Menubar/filen-cli"
+          helper="$runtime/node"
+          addon="$runtime/node_modules/@jupiterpi/node-keyring/node-keyring.linux-x64-gnu.node"
+          host="$root/usr/bin/filen-menubar"
+          [[ -x "$helper" && -x "$host" && -f "$runtime/filen-cli.cjs" && -f "$addon" ]]
+          helper_version="$(tr -d '\r\n' < third-party/filen-cli/VERSION)"
+          [[ "$(NO_COLOR=1 "$helper" --disable-warning=DEP0169 \
+            "$runtime/filen-cli.cjs" --skip-update --data-dir "$RUNNER_TEMP/filen-data" --version)" == \
+            "Filen CLI ${helper_version}" ]]
+          (cd "$runtime" && "$helper" -e \
+            'const keyring = require("@jupiterpi/node-keyring"); if (typeof keyring.getPassword !== "function") process.exit(1)')
+          check_glibc_floor() {
+            local file="$1" maximum
+            if readelf --dyn-syms --wide "$file" | grep -Fq '__isoc23_'; then
+              echo "$file references an unsupported __isoc23 symbol" >&2
+              exit 1
+            fi
+            maximum="$(readelf --version-info "$file" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
+            [[ "$(printf '%s\n' "$maximum" '2.34' | sort -V | tail -1)" == '2.34' ]]
+          }
+          check_glibc_floor "$host"
+          check_glibc_floor "$helper"
+          check_glibc_floor "$addon"
+          [[ "$(rpm -qp --qf '%{LICENSE}' "$rpm")" == 'MIT AND AGPL-3.0-only' ]]
+          rpm -qlp "$rpm" | grep -Fq '/usr/lib/Filen Menubar/filen-cli/node'
+          for file in NODE-LICENSE.txt THIRD_PARTY_NOTICES.txt runtime.cdx.json; do
+            [[ -s "$root/usr/lib/Filen Menubar/licenses/filen-cli/$file" ]]
+          done
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.name }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            ${{ runner.temp }}/filen-menubar-cli-*-source.tar.gz
+            ${{ runner.temp }}/filen-menubar-cli-*-runtime.cdx.json
+            ${{ runner.temp }}/filen-menubar-cli-*-THIRD_PARTY_NOTICES.txt
           if-no-files-found: error
 
       - name: Upload Linux artifacts
@@ -205,6 +346,9 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            ${{ runner.temp }}/filen-menubar-cli-*-source.tar.gz
+            ${{ runner.temp }}/filen-menubar-cli-*-runtime.cdx.json
+            ${{ runner.temp }}/filen-menubar-cli-*-THIRD_PARTY_NOTICES.txt
           if-no-files-found: error
 
   arch:
@@ -212,67 +356,43 @@ jobs:
     needs: [prepare, build]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Build where pacman lives, so makepkg and namcap are the real thing.
-    #
-    # An authenticated pull gets a far higher Docker Hub rate limit than the
-    # anonymous per-IP one, which is shared across all Actions runners. The
-    # credentials belong here rather than in a docker/login-action step: the
-    # job container is pulled during "Initialize containers", before any step
-    # of this job runs, so a login step would come too late.
     container:
       image: archlinux:base-devel
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
-
     steps:
       - name: Install container tooling
         run: pacman -Syu --needed --noconfirm git namcap
-
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.prepare.outputs.commit }}
-
-      - name: Trust the workspace checkout
+      - name: Trust workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
       - name: Download Linux artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: Linux-x64
           path: linux-artifacts
-
       - name: Render PKGBUILD
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           deb="$(find linux-artifacts -name '*.deb' -print -quit)"
-          [[ -n "$deb" ]] || {
-            echo "no .deb in the Linux-x64 artifact" >&2
-            exit 1
-          }
+          [[ -n "$deb" ]]
           packaging/arch/render.sh "$VERSION" "$PWD/archbuild" "$deb"
-          cat archbuild/PKGBUILD
-
       - name: Build package
         run: |
           set -euo pipefail
-          # makepkg refuses to run as root, and the container is root.
           useradd --create-home builder
           chown -R builder: archbuild
-          # --nodeps: this only repacks a prebuilt binary, so pulling the
-          # runtime deps into the container would buy nothing.
-          runuser -u builder -- \
-            bash -c 'cd archbuild && makepkg --noconfirm --nodeps'
-
+          runuser -u builder -- bash -c 'cd archbuild && makepkg --noconfirm --nodeps'
       - name: Lint package
         run: |
-          set -euo pipefail
           namcap archbuild/PKGBUILD || echo "::warning::namcap flagged the PKGBUILD"
           namcap archbuild/*.pkg.tar.zst || echo "::warning::namcap flagged the package"
-
       - name: Upload Arch artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -286,16 +406,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
-
-      - name: Create Release
+      - name: Assemble release assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            [[ ! -e "release-assets/$name" ]] || {
+              echo "duplicate release asset basename: $name" >&2
+              exit 1
+            }
+            cp "$file" "release-assets/$name"
+          done < <(find artifacts -type f -print0)
+          (
+            cd release-assets
+            sha256sum -- ./* >SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+      - name: Create draft release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
           tag_name: v${{ needs.prepare.outputs.version }}
-          files: artifacts/**/*
+          files: release-assets/*

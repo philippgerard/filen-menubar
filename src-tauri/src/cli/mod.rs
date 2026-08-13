@@ -1,7 +1,7 @@
 //! CLI module for managing the Filen CLI subprocess
 //!
 //! This module handles:
-//! - Finding the Filen CLI binary on the system (`discovery`)
+//! - Running the app-bundled Filen CLI backend (`discovery`)
 //! - Parsing JSON events from the CLI's verbose output (`events`)
 //! - Detecting network errors for offline status (`network`)
 //! - Process abstraction for testability (`process`)
@@ -35,7 +35,7 @@ pub mod framer;
 pub mod network;
 pub mod process;
 
-pub use discovery::{find_filen_cli, FilenCliInfo};
+pub use discovery::{bundled_cli_version, bundled_cli_version_output, FilenCliRuntime};
 pub use events::{CliErrorEvent, CliEvent, TransferData};
 use framer::{Frame, JsonFramer};
 
@@ -49,11 +49,12 @@ use crate::error::CliError;
 use crate::state::{AppState, CurrentTransfer, StorageInfo, SyncState, TransferDirection};
 use network::is_network_error;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{oneshot, Mutex};
+use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 
 /// Whether an operation name identifies a canonical sync task rather than a
@@ -299,30 +300,152 @@ fn text_preview(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
+/// Maximum stderr bytes retained while waiting for a record terminator.
+/// Diagnostics are useful, but a malformed helper must not be able to grow the
+/// tray application's memory indefinitely by writing one newline-free record.
+const MAX_STDERR_RECORD_BYTES: usize = 64 * 1024;
+
+struct BoundedLineFramer {
+    buffer: Vec<u8>,
+    discarding: bool,
+    max_bytes: usize,
+}
+
+impl BoundedLineFramer {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(max_bytes.min(8 * 1024)),
+            discarding: false,
+            max_bytes,
+        }
+    }
+
+    fn push_chunk(&mut self, chunk: &[u8]) -> Vec<String> {
+        let mut records = Vec::new();
+
+        for &byte in chunk {
+            if self.discarding {
+                if byte == b'\n' {
+                    self.discarding = false;
+                }
+                continue;
+            }
+
+            if byte == b'\n' {
+                if let Some(record) = self.take_record() {
+                    records.push(record);
+                }
+                continue;
+            }
+
+            if self.buffer.len() == self.max_bytes {
+                log::warn!(
+                    "Discarding oversized CLI stderr record after {} buffered bytes",
+                    self.buffer.len()
+                );
+                self.buffer.clear();
+                self.discarding = true;
+                continue;
+            }
+
+            self.buffer.push(byte);
+        }
+
+        records
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        if self.discarding {
+            self.discarding = false;
+            self.buffer.clear();
+            None
+        } else {
+            self.take_record()
+        }
+    }
+
+    fn take_record(&mut self) -> Option<String> {
+        if self.buffer.last() == Some(&b'\r') {
+            self.buffer.pop();
+        }
+        if self.buffer.is_empty() {
+            return None;
+        }
+
+        let record = String::from_utf8_lossy(&self.buffer).into_owned();
+        self.buffer.clear();
+        Some(record)
+    }
+}
+
 /// Manages the Filen CLI process
 pub struct CliManager {
-    process: Arc<RwLock<Option<Child>>>,
+    runtime: FilenCliRuntime,
     state: AppState,
     activity: Arc<ActivityHistory>,
-    shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
-    /// Set while the app itself is stopping the CLI (pause, logout, quit, restart).
-    /// The output monitors check this so an intentional kill is not reported as
-    /// an Error state — which would otherwise trigger the auto-restart loop.
-    stopping: Arc<AtomicBool>,
+    /// Serializes complete start/stop transactions. In particular, a stop that
+    /// is queued after a start cannot finish before that start spawns a child.
+    lifecycle: Mutex<CliLifecycle>,
+    /// Identifies the process whose output is allowed to update application
+    /// state. Zero means that no generation is active (including during stop).
+    active_generation: Arc<AtomicU64>,
+    /// Tracks the direct child independently of pipe-monitor teardown so a
+    /// natural exit is reflected immediately by `is_running`.
+    running: Arc<AtomicBool>,
+    /// User intent is distinct from whether the current child is alive. A
+    /// natural crash keeps this true so the status loop may retry; pause,
+    /// logout, and quit clear it before waiting for the lifecycle lock.
+    desired_running: AtomicBool,
+    /// Invalidates restart decisions made before a user stop request.
+    start_epoch: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SyncStartPermit {
+    epoch: u64,
+}
+
+#[derive(Default)]
+struct CliLifecycle {
+    next_generation: u64,
+    stop_tx: Option<oneshot::Sender<()>>,
+    supervisor: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct ProcessGeneration {
+    state: AppState,
+    activity: Arc<ActivityHistory>,
+    active_generation: Arc<AtomicU64>,
+    running: Arc<AtomicBool>,
+    number: u64,
+}
+
+impl ProcessGeneration {
+    fn is_active(&self) -> bool {
+        self.active_generation.load(Ordering::SeqCst) == self.number
+    }
 }
 
 impl CliManager {
-    pub fn new(state: AppState) -> Self {
-        Self::with_activity(state, Arc::new(ActivityHistory::in_memory()))
+    pub fn new(state: AppState, runtime: FilenCliRuntime) -> Self {
+        Self::with_activity(state, Arc::new(ActivityHistory::in_memory()), runtime)
     }
 
-    pub fn with_activity(state: AppState, activity: Arc<ActivityHistory>) -> Self {
+    pub fn with_activity(
+        state: AppState,
+        activity: Arc<ActivityHistory>,
+        runtime: FilenCliRuntime,
+    ) -> Self {
         Self {
-            process: Arc::new(RwLock::new(None)),
+            runtime,
             state,
             activity,
-            shutdown_tx: Arc::new(RwLock::new(None)),
-            stopping: Arc::new(AtomicBool::new(false)),
+            lifecycle: Mutex::new(CliLifecycle::default()),
+            active_generation: Arc::new(AtomicU64::new(0)),
+            running: Arc::new(AtomicBool::new(false)),
+            desired_running: AtomicBool::new(false),
+            start_epoch: AtomicU64::new(0),
         }
     }
 
@@ -331,36 +454,64 @@ impl CliManager {
         self.activity.as_ref()
     }
 
-    /// Check if filen CLI is installed (single attempt)
-    async fn check_cli_once() -> bool {
-        // Run filesystem search in blocking context to avoid blocking async runtime
-        let cli_info = match tokio::task::spawn_blocking(find_filen_cli).await {
-            Ok(info) => info,
-            Err(e) => {
-                log::error!("Failed to search for filen CLI: {}", e);
-                return false;
-            }
-        };
-
-        log::info!("Checking filen CLI availability at: {}", cli_info.command);
-
-        let mut cmd = Command::new(&cli_info.command);
-        cmd.arg("--version")
-            .stdin(Stdio::null()) // Prevent hanging on stdin when running from autostart
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-
-        // Set PATH if we found a specific installation (needed for node-based CLI)
-        if let Some(ref path_env) = cli_info.path_env {
-            log::debug!("Using PATH: {}", path_env);
-            cmd.env("PATH", path_env);
+    /// Record an explicit start/resume request and return the permit carried
+    /// through the asynchronous start transaction.
+    pub(crate) fn request_sync_start(&self) -> SyncStartPermit {
+        self.desired_running.store(true, Ordering::SeqCst);
+        SyncStartPermit {
+            epoch: self.start_epoch.load(Ordering::SeqCst),
         }
+    }
+
+    /// Capture a permit for an automatic retry without overriding pause/logout.
+    pub(crate) fn retry_sync_permit(&self) -> Option<SyncStartPermit> {
+        let epoch = self.start_epoch.load(Ordering::SeqCst);
+        self.desired_running
+            .load(Ordering::SeqCst)
+            .then_some(SyncStartPermit { epoch })
+    }
+
+    fn permit_is_current(&self, permit: SyncStartPermit) -> bool {
+        self.desired_running.load(Ordering::SeqCst)
+            && self.start_epoch.load(Ordering::SeqCst) == permit.epoch
+    }
+
+    /// Check that the bundled helper exists and is exactly the patched version.
+    async fn check_cli_once(&self) -> bool {
+        self.check_cli_once_with_timeout(Duration::from_secs(5))
+            .await
+    }
+
+    async fn check_cli_once_with_timeout(&self, probe_timeout: Duration) -> bool {
+        log::info!(
+            "Checking bundled Filen CLI at: {}",
+            self.runtime.command().display()
+        );
+
+        let mut cmd = Command::new(self.runtime.command());
+        cmd.args(self.runtime.common_args())
+            .arg("--version")
+            .stdin(Stdio::null()) // Prevent hanging on stdin when running from autostart
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
 
         // Use a timeout to avoid hanging if the CLI is stuck
-        match timeout(Duration::from_secs(5), cmd.status()).await {
-            Ok(Ok(status)) => {
-                let available = status.success();
-                log::info!("Filen CLI available: {}", available);
+        match timeout(probe_timeout, cmd.output()).await {
+            Ok(Ok(output)) => {
+                let version = String::from_utf8_lossy(&output.stdout);
+                let expected_version = bundled_cli_version_output();
+                let available = output.status.success() && version.trim() == expected_version;
+                if available {
+                    log::info!("Bundled Filen CLI available: {}", version.trim());
+                } else {
+                    log::warn!(
+                        "Bundled Filen CLI failed version validation: status={}, output={:?}, expected={:?}",
+                        output.status,
+                        version.trim(),
+                        expected_version
+                    );
+                }
                 available
             }
             Ok(Err(e)) => {
@@ -374,45 +525,54 @@ impl CliManager {
         }
     }
 
-    /// Check if filen CLI is installed, with retries for macOS Login Item boot timing.
-    ///
-    /// When launched as a Login Item at macOS boot, the app may start before the
-    /// filesystem (especially version manager directories like fnm/nvm) is fully ready.
-    /// This function retries with exponential backoff to handle this race condition.
-    pub async fn is_cli_available() -> bool {
-        // Retry delays: 0s (immediate), 2s, 4s, 8s
-        let retry_delays = [0, 2, 4, 8];
+    /// Check whether the exact helper packaged beside this executable runs.
+    /// Unlike PATH discovery, a bundled resource cannot appear later, so one
+    /// bounded probe is sufficient and avoids delaying a useful error state.
+    pub async fn is_cli_available(&self) -> bool {
+        self.check_cli_once().await
+    }
 
-        for (attempt, delay_secs) in retry_delays.iter().enumerate() {
-            if *delay_secs > 0 {
-                log::info!(
-                    "CLI not found, retrying in {}s (attempt {}/{})",
-                    delay_secs,
-                    attempt + 1,
-                    retry_delays.len()
-                );
-                tokio::time::sleep(Duration::from_secs(*delay_secs)).await;
-            }
+    fn sync_command(&self, sync_pairs_path: &std::path::Path) -> Command {
+        let mut cmd = Command::new(self.runtime.command());
+        cmd.args(self.runtime.common_args())
+            .arg("--verbose")
+            .arg("sync")
+            .arg(sync_pairs_path)
+            .arg("--continuous")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
-            if Self::check_cli_once().await {
-                if attempt > 0 {
-                    log::info!("CLI found after {} retries", attempt);
-                }
-                return true;
-            }
-        }
+        // Run the CLI in its own process group so we can terminate the whole
+        // tree if the backend spawns helper processes.
+        #[cfg(unix)]
+        cmd.process_group(0);
 
-        log::error!(
-            "Filen CLI not found after {} attempts. Please install it with: npm install -g @filen/cli",
-            retry_delays.len()
-        );
-        false
+        cmd
     }
 
     /// Start the sync process (uses CLI's stored session)
     pub async fn start_sync(&self, config: &Config) -> Result<(), CliError> {
-        // Stop any existing process
-        self.stop_sync().await;
+        let permit = self.request_sync_start();
+        self.start_sync_if_permitted(config, permit).await
+    }
+
+    pub(crate) async fn start_sync_if_permitted(
+        &self,
+        config: &Config,
+        permit: SyncStartPermit,
+    ) -> Result<(), CliError> {
+        let mut lifecycle = self.lifecycle.lock().await;
+        if !self.permit_is_current(permit) {
+            log::info!("Discarding a stale sync start request");
+            return Ok(());
+        }
+
+        self.stop_sync_locked(&mut lifecycle).await;
+        if !self.permit_is_current(permit) {
+            log::info!("Sync start was cancelled while stopping the previous process");
+            return Ok(());
+        }
 
         // Generate syncPairs.json with ignore patterns
         let sync_pairs_path = config.write_sync_pairs().map_err(|e| {
@@ -421,6 +581,50 @@ impl CliManager {
         })?;
 
         log::info!("Generated syncPairs.json at: {:?}", sync_pairs_path);
+        if !self.permit_is_current(permit) {
+            log::info!("Sync start was cancelled before process launch");
+            return Ok(());
+        }
+        self.start_sync_locked(config, &sync_pairs_path, &mut lifecycle)
+            .await
+    }
+
+    #[cfg(test)]
+    async fn start_sync_with_pairs_path(
+        &self,
+        config: &Config,
+        sync_pairs_path: &std::path::Path,
+    ) -> Result<(), CliError> {
+        let permit = self.request_sync_start();
+        self.start_sync_with_pairs_path_if_permitted(config, sync_pairs_path, permit)
+            .await
+    }
+
+    #[cfg(test)]
+    async fn start_sync_with_pairs_path_if_permitted(
+        &self,
+        config: &Config,
+        sync_pairs_path: &std::path::Path,
+        permit: SyncStartPermit,
+    ) -> Result<(), CliError> {
+        let mut lifecycle = self.lifecycle.lock().await;
+        if !self.permit_is_current(permit) {
+            return Ok(());
+        }
+        self.stop_sync_locked(&mut lifecycle).await;
+        if !self.permit_is_current(permit) {
+            return Ok(());
+        }
+        self.start_sync_locked(config, sync_pairs_path, &mut lifecycle)
+            .await
+    }
+
+    async fn start_sync_locked(
+        &self,
+        config: &Config,
+        sync_pairs_path: &std::path::Path,
+        lifecycle: &mut CliLifecycle,
+    ) -> Result<(), CliError> {
         log::info!(
             "Sync config: local={}, remote={}, mode={}, ignore={:?}, excludeDotFiles={}",
             config.local_path.display(),
@@ -430,162 +634,45 @@ impl CliManager {
             config.exclude_dot_files
         );
 
-        // Don't pass credentials - CLI will use its stored session
-        // Use --verbose to get detailed file sync information
-        // Discovery walks the filesystem; keep it off the async runtime
-        let cli_info = tokio::task::spawn_blocking(find_filen_cli)
-            .await
-            .map_err(|e| CliError::Spawn(std::io::Error::other(e)))?;
-        log::info!("Using filen CLI at: {}", cli_info.command);
-        if let Some(ref path_env) = cli_info.path_env {
-            log::info!("Setting PATH for CLI: {}", path_env);
-        }
+        // Don't pass credentials - CLI will use its stored session.
+        // Use --verbose to get detailed file sync information.
+        log::info!(
+            "Using bundled Filen CLI at: {}",
+            self.runtime.command().display()
+        );
 
-        let mut cmd = Command::new(&cli_info.command);
-        cmd.arg("--verbose")
-            .arg("sync")
-            .arg(&sync_pairs_path)
-            .arg("--continuous")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        // Run the CLI in its own process group so we can terminate the whole
-        // tree (the CLI is a Node app that may spawn children)
-        #[cfg(unix)]
-        cmd.process_group(0);
-
-        // Set PATH if we found a specific installation (needed for node-based CLI)
-        if let Some(ref path_env) = cli_info.path_env {
-            cmd.env("PATH", path_env);
-        }
-
-        // New process: future exits are real crashes until stop_sync says otherwise
-        self.stopping.store(false, Ordering::SeqCst);
-
+        let mut cmd = self.sync_command(sync_pairs_path);
         let mut child = cmd.spawn()?;
-
-        // Get stdout and stderr
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        // Store the process
-        *self.process.write().await = Some(child);
+        // Automatic retries do not set Scanning at their call site: doing so
+        // before permit validation lets a completed pause be overwritten by a
+        // stale restart. The lifecycle lock and successful spawn make this the
+        // authoritative transition. Explicit starts already set the same state.
+        self.state.set_sync_state(SyncState::Scanning).await;
 
-        // Create shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
-        *self.shutdown_tx.write().await = Some(shutdown_tx);
+        lifecycle.next_generation = lifecycle.next_generation.wrapping_add(1).max(1);
+        let generation = lifecycle.next_generation;
+        self.active_generation.store(generation, Ordering::SeqCst);
+        self.running.store(true, Ordering::SeqCst);
 
-        // Note: Initial state is already set by caller (lib.rs) to Scanning
-        // CLI events will update to Syncing when transfers begin, or Synced when done
-
-        // Spawn output monitoring task
-        let state = self.state.clone();
-        let activity = self.activity.clone();
-        let stopping = self.stopping.clone();
-        tokio::spawn(async move {
-            if let Some(stdout) = stdout {
-                let mut reader = BufReader::new(stdout);
-                let mut chunk = [0_u8; 64 * 1024];
-                let mut pending = Vec::new();
-
-                // Frames multi-line pretty-printed JSON objects from the CLI
-                let mut framer = JsonFramer::new();
-
-                loop {
-                    tokio::select! {
-                        _ = shutdown_rx.recv() => {
-                            log::info!("Sync monitor received shutdown signal");
-                            break;
-                        }
-                        result = reader.read(&mut chunk) => match result {
-                        Ok(bytes_read) if bytes_read > 0 => {
-                            pending.extend_from_slice(&chunk[..bytes_read]);
-                            if let Some(text) = take_valid_utf8(&mut pending) {
-                                log::debug!("Read {} bytes from CLI stdout", bytes_read);
-                                let frames = framer.push_chunk(&text);
-                                handle_cli_frames(&state, &activity, frames).await;
-                            }
-                        }
-                        Ok(_) | Err(_) => {
-                            if !pending.is_empty() {
-                                let text = String::from_utf8_lossy(&pending).into_owned();
-                                let frames = framer.push_chunk(&text);
-                                handle_cli_frames(&state, &activity, frames).await;
-                            }
-
-                            // EOF or read error - process exited
-                            if stopping.load(Ordering::SeqCst) {
-                                // We killed it on purpose (pause/logout/quit/restart);
-                                // don't report an error state
-                                log::info!("CLI process stopped intentionally");
-                                break;
-                            }
-                            log::warn!("CLI process stdout closed unexpectedly");
-                            // Give stderr handler time to process network errors
-                            // (stderr and stdout handlers run concurrently)
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            // Preserve Offline state if already set by stderr handler
-                            // (network errors often cause CLI to crash)
-                            let current_state = state.get_sync_state().await;
-                            if current_state != SyncState::Offline {
-                                state.set_sync_state(SyncState::Error).await;
-                            }
-                            break;
-                        }
-                        },
-                    }
-                }
-            }
-        });
-
-        // Spawn stderr monitoring task
-        let state_for_stderr = self.state.clone();
-        let stopping_for_stderr = self.stopping.clone();
-        if let Some(stderr) = stderr {
-            tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                let mut lines = reader.lines();
-                // Track if we've detected a network error in this stderr stream
-                // Once detected, we shouldn't downgrade to Error
-                let mut network_error_detected = false;
-
-                while let Ok(Some(line)) = lines.next_line().await {
-                    log::warn!("CLI stderr: {}", line);
-
-                    // Ignore the noise a killed process flushes during intentional stop
-                    if stopping_for_stderr.load(Ordering::SeqCst) {
-                        continue;
-                    }
-
-                    // Try to parse as JSON error event
-                    if let Ok(err_event) = serde_json::from_str::<CliErrorEvent>(&line) {
-                        if err_event.event_type.as_deref() == Some("error") {
-                            let msg = err_event.error.or(err_event.message).unwrap_or_default();
-                            if is_network_error(&msg) {
-                                log::warn!("Network error from stderr: {}", msg);
-                                state_for_stderr.set_sync_state(SyncState::Offline).await;
-                                network_error_detected = true;
-                            } else if !network_error_detected {
-                                log::error!("CLI error: {}", msg);
-                                state_for_stderr.set_sync_state(SyncState::Error).await;
-                            }
-                        }
-                    } else if is_network_error(&line) {
-                        // Text-based network error detection
-                        log::warn!("Network error detected in stderr: {}", line);
-                        state_for_stderr.set_sync_state(SyncState::Offline).await;
-                        network_error_detected = true;
-                    } else if !network_error_detected
-                        && (line.to_lowercase().contains("error") || line.contains("failed"))
-                    {
-                        // Fallback text detection for non-JSON errors
-                        // Only set Error if we haven't detected a network error
-                        state_for_stderr.set_sync_state(SyncState::Error).await;
-                    }
-                }
-            });
-        }
+        let (stop_tx, stop_rx) = oneshot::channel();
+        lifecycle.stop_tx = Some(stop_tx);
+        let process_generation = ProcessGeneration {
+            state: self.state.clone(),
+            activity: self.activity.clone(),
+            active_generation: self.active_generation.clone(),
+            running: self.running.clone(),
+            number: generation,
+        };
+        lifecycle.supervisor = Some(tokio::spawn(Self::supervise_process(
+            child,
+            stdout,
+            stderr,
+            process_generation,
+            stop_rx,
+        )));
 
         Ok(())
     }
@@ -597,19 +684,219 @@ impl CliManager {
     /// Setting Paused here used to cause a visible flicker when start_sync
     /// stopped a crashed process during restart cleanup.
     pub async fn stop_sync(&self) {
-        // Mark this as an intentional stop BEFORE killing, so the output
-        // monitors don't interpret the process exit as a crash
-        self.stopping.store(true, Ordering::SeqCst);
+        // Publish user intent before waiting for the transaction mutex. Any
+        // already-decided retry carrying the previous epoch is now stale.
+        self.desired_running.store(false, Ordering::SeqCst);
+        self.start_epoch.fetch_add(1, Ordering::SeqCst);
 
-        // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.write().await.take() {
-            let _ = tx.send(()).await;
+        let mut lifecycle = self.lifecycle.lock().await;
+        self.stop_sync_locked(&mut lifecycle).await;
+    }
+
+    async fn stop_sync_locked(&self, lifecycle: &mut CliLifecycle) {
+        // Invalidate the old generation before asking it to stop. Its monitor
+        // tasks are then joined before this transaction can launch a replacement.
+        self.active_generation.store(0, Ordering::SeqCst);
+
+        if let Some(tx) = lifecycle.stop_tx.take() {
+            log::info!("Stopping sync process");
+            let _ = tx.send(());
         }
 
-        // Kill the process
-        if let Some(mut child) = self.process.write().await.take() {
-            log::info!("Stopping sync process");
-            Self::terminate_process_tree(&mut child).await;
+        if let Some(supervisor) = lifecycle.supervisor.take() {
+            if let Err(error) = supervisor.await {
+                log::error!("CLI process supervisor failed: {error}");
+            }
+        }
+
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    async fn supervise_process(
+        mut child: Child,
+        stdout: Option<tokio::process::ChildStdout>,
+        stderr: Option<tokio::process::ChildStderr>,
+        generation: ProcessGeneration,
+        mut stop_rx: oneshot::Receiver<()>,
+    ) {
+        let stdout_monitor =
+            stdout.map(|stdout| tokio::spawn(Self::monitor_stdout(stdout, generation.clone())));
+        let stderr_monitor =
+            stderr.map(|stderr| tokio::spawn(Self::monitor_stderr(stderr, generation.clone())));
+
+        let intentional = tokio::select! {
+            biased;
+            _ = &mut stop_rx => {
+                Self::terminate_process_tree(&mut child).await;
+                true
+            }
+            result = child.wait() => {
+                match result {
+                    Ok(status) => log::warn!("CLI process exited unexpectedly: {status}"),
+                    Err(error) => log::error!("Failed to wait for CLI process: {error}"),
+                }
+                false
+            }
+        };
+
+        // `child.wait()` has completed (naturally or through termination), so
+        // the direct child is no longer running and has been reaped.
+        generation.running.store(false, Ordering::SeqCst);
+
+        let ((), ()) = tokio::join!(
+            Self::join_monitor(stdout_monitor, "stdout"),
+            Self::join_monitor(stderr_monitor, "stderr")
+        );
+
+        if intentional || !generation.is_active() {
+            log::info!("CLI process stopped intentionally");
+            return;
+        }
+
+        // Stderr has now been fully processed, so preserve its more specific
+        // Offline diagnosis instead of replacing it with a generic error.
+        if generation.state.get_sync_state().await != SyncState::Offline {
+            generation.state.set_sync_state(SyncState::Error).await;
+        }
+        let _ = generation.active_generation.compare_exchange(
+            generation.number,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    async fn monitor_stdout(stdout: tokio::process::ChildStdout, generation: ProcessGeneration) {
+        let mut reader = BufReader::new(stdout);
+        let mut chunk = [0_u8; 64 * 1024];
+        let mut pending = Vec::new();
+        let mut framer = JsonFramer::new();
+
+        loop {
+            if !generation.is_active() {
+                break;
+            }
+
+            match reader.read(&mut chunk).await {
+                Ok(bytes_read) if bytes_read > 0 => {
+                    if !generation.is_active() {
+                        break;
+                    }
+                    pending.extend_from_slice(&chunk[..bytes_read]);
+                    if let Some(text) = take_valid_utf8(&mut pending) {
+                        log::debug!("Read {} bytes from CLI stdout", bytes_read);
+                        let frames = framer.push_chunk(&text);
+                        handle_cli_frames(&generation.state, &generation.activity, frames).await;
+                    }
+                }
+                Ok(_) => {
+                    if !pending.is_empty() && generation.is_active() {
+                        let text = String::from_utf8_lossy(&pending).into_owned();
+                        let frames = framer.push_chunk(&text);
+                        handle_cli_frames(&generation.state, &generation.activity, frames).await;
+                    }
+                    break;
+                }
+                Err(error) => {
+                    if generation.is_active() {
+                        log::warn!("Failed reading CLI stdout: {error}");
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn monitor_stderr(stderr: tokio::process::ChildStderr, generation: ProcessGeneration) {
+        let mut reader = BufReader::new(stderr);
+        let mut chunk = [0_u8; 16 * 1024];
+        let mut framer = BoundedLineFramer::new(MAX_STDERR_RECORD_BYTES);
+        let mut network_error_detected = false;
+
+        loop {
+            if !generation.is_active() {
+                break;
+            }
+
+            match reader.read(&mut chunk).await {
+                Ok(bytes_read) if bytes_read > 0 => {
+                    if !generation.is_active() {
+                        break;
+                    }
+                    for line in framer.push_chunk(&chunk[..bytes_read]) {
+                        if !generation.is_active() {
+                            break;
+                        }
+                        Self::handle_stderr_record(&generation, &mut network_error_detected, &line)
+                            .await;
+                    }
+                }
+                Ok(_) => {
+                    if generation.is_active() {
+                        if let Some(line) = framer.finish() {
+                            Self::handle_stderr_record(
+                                &generation,
+                                &mut network_error_detected,
+                                &line,
+                            )
+                            .await;
+                        }
+                    }
+                    break;
+                }
+                Err(error) => {
+                    if generation.is_active() {
+                        log::warn!("Failed reading CLI stderr: {error}");
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn handle_stderr_record(
+        generation: &ProcessGeneration,
+        network_error_detected: &mut bool,
+        line: &str,
+    ) {
+        log::warn!("CLI stderr: {}", line);
+
+        if let Ok(err_event) = serde_json::from_str::<CliErrorEvent>(line) {
+            if err_event.event_type.as_deref() == Some("error") {
+                let msg = err_event.error.or(err_event.message).unwrap_or_default();
+                if is_network_error(&msg) {
+                    log::warn!("Network error from stderr: {}", msg);
+                    generation.state.set_sync_state(SyncState::Offline).await;
+                    *network_error_detected = true;
+                } else if !*network_error_detected {
+                    log::error!("CLI error: {}", msg);
+                    generation.state.set_sync_state(SyncState::Error).await;
+                }
+            }
+        } else if is_network_error(line) {
+            log::warn!("Network error detected in stderr: {}", line);
+            generation.state.set_sync_state(SyncState::Offline).await;
+            *network_error_detected = true;
+        } else if !*network_error_detected
+            && (line.to_ascii_lowercase().contains("error") || line.contains("failed"))
+        {
+            generation.state.set_sync_state(SyncState::Error).await;
+        }
+    }
+
+    async fn join_monitor(mut monitor: Option<JoinHandle<()>>, stream: &str) {
+        let Some(mut monitor) = monitor.take() else {
+            return;
+        };
+
+        match timeout(Duration::from_secs(2), &mut monitor).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::error!("CLI {stream} monitor failed: {error}"),
+            Err(_) => {
+                log::warn!("CLI {stream} monitor did not finish; aborting it");
+                monitor.abort();
+                let _ = monitor.await;
+            }
         }
     }
 
@@ -627,7 +914,10 @@ impl CliManager {
                     libc::killpg(pgid, libc::SIGTERM);
                 }
                 // Give the CLI a moment to shut down cleanly
-                if timeout(Duration::from_secs(2), child.wait()).await.is_ok() {
+                if matches!(
+                    timeout(Duration::from_secs(2), child.wait()).await,
+                    Ok(Ok(_))
+                ) {
                     // Reap any stragglers in the group
                     unsafe {
                         libc::killpg(pgid, libc::SIGKILL);
@@ -640,13 +930,26 @@ impl CliManager {
                 }
             }
         }
-        let _ = child.kill().await;
+        let _ = child.start_kill();
+        let _ = child.wait().await;
     }
 
     /// Check if sync is running
     #[allow(dead_code)]
     pub async fn is_running(&self) -> bool {
-        self.process.read().await.is_some()
+        if !self.running.load(Ordering::SeqCst) {
+            return false;
+        }
+
+        let lifecycle = self.lifecycle.lock().await;
+        let running = lifecycle
+            .supervisor
+            .as_ref()
+            .is_some_and(|supervisor| !supervisor.is_finished());
+        if !running {
+            self.running.store(false, Ordering::SeqCst);
+        }
+        running
     }
 
     /// Query storage quota from CLI (uses CLI's stored session)
@@ -662,9 +965,16 @@ impl CliManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_cli_event, take_valid_utf8, text_preview, CliEvent, TransferData};
+    use super::{
+        bundled_cli_version_output, handle_cli_event, take_valid_utf8, text_preview,
+        BoundedLineFramer, CliEvent, CliManager, FilenCliRuntime, TransferData,
+    };
     use crate::activity::ActivityHistory;
-    use crate::state::{AppState, CurrentTransfer, TransferDirection};
+    use crate::config::Config;
+    use crate::state::{AppState, CurrentTransfer, SyncState, TransferDirection};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
 
     fn transfer_event(operation: &str, transfer_type: &str) -> CliEvent {
         CliEvent::Transfer {
@@ -676,6 +986,75 @@ mod tests {
                 size: Some(1024),
             }),
         }
+    }
+
+    #[cfg(unix)]
+    fn fake_sync_manager(
+        script_body: &str,
+    ) -> (tempfile::TempDir, Arc<CliManager>, Config, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("create fake CLI directory");
+        let entrypoint = temp.path().join("fake-filen-cli.sh");
+        let command = temp.path().join("fake-node");
+        std::fs::write(&entrypoint, format!("#!/bin/sh\n{script_body}\n"))
+            .expect("write fake sync CLI");
+        std::fs::set_permissions(&entrypoint, std::fs::Permissions::from_mode(0o700))
+            .expect("make fake sync CLI executable");
+        std::fs::write(
+            &command,
+            "#!/bin/sh\n[ \"$1\" = \"--disable-warning=DEP0169\" ] || exit 41\nshift\nentrypoint=$1\nshift\nexec \"$entrypoint\" \"$@\"\n",
+        )
+        .expect("write fake Node wrapper");
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700))
+            .expect("make fake Node wrapper executable");
+
+        let pairs_path = temp.path().join("syncPairs.json");
+        std::fs::write(&pairs_path, "[]\n").expect("write fake sync pairs");
+        let config = Config {
+            local_path: temp.path().join("sync-root"),
+            ..Config::default()
+        };
+        let runtime = FilenCliRuntime::new(command, entrypoint, temp.path().join("data"));
+        let manager = Arc::new(CliManager::new(AppState::new(), runtime));
+
+        (temp, manager, config, pairs_path)
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_pid_count(path: &Path, expected: usize) -> Vec<i32> {
+        for _ in 0..100 {
+            let pids = std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| line.parse::<i32>().ok())
+                .collect::<Vec<_>>();
+            if pids.len() >= expected {
+                return pids;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        panic!(
+            "expected at least {expected} fake process ids in {}",
+            path.display()
+        );
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: i32) -> bool {
+        (unsafe { libc::kill(pid, 0) }) == 0
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_process_exit(pid: i32) {
+        for _ in 0..100 {
+            if !process_is_alive(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("fake CLI process {pid} remained alive");
     }
 
     #[test]
@@ -711,6 +1090,352 @@ mod tests {
         // The old 100-byte slice ended in the middle of `é`.
         let text = format!("{}é-tail", "a".repeat(99));
         assert_eq!(text_preview(&text, 100), format!("{}é", "a".repeat(99)));
+    }
+
+    #[test]
+    fn stderr_framer_discards_oversized_newline_free_record_and_recovers() {
+        let mut framer = BoundedLineFramer::new(8);
+
+        assert!(framer.push_chunk(b"1234567890123456").is_empty());
+        assert!(framer.buffer.is_empty());
+        assert!(framer.discarding);
+
+        assert_eq!(
+            framer.push_chunk(b"still discarded\nhealthy\r\n"),
+            vec!["healthy".to_string()]
+        );
+        assert!(!framer.discarding);
+    }
+
+    #[test]
+    fn stderr_framer_flushes_a_bounded_final_record() {
+        let mut framer = BoundedLineFramer::new(16);
+
+        assert!(framer.push_chunk(b"final error").is_empty());
+        assert_eq!(framer.finish().as_deref(), Some("final error"));
+        assert!(framer.finish().is_none());
+    }
+
+    #[cfg(unix)]
+    fn fake_version_cli(version: &str) -> (tempfile::TempDir, FilenCliRuntime) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("create fake CLI directory");
+        let command = temp.path().join("fake-node");
+        let entrypoint = temp.path().join("filen-cli.cjs");
+        let script = format!(
+            "#!/bin/sh\n\
+             [ \"$1\" = \"--disable-warning=DEP0169\" ] || exit 41\n\
+             [ \"$2\" = \"{}\" ] || exit 42\n\
+             [ \"$3\" = \"--skip-update\" ] || exit 43\n\
+             [ \"$4\" = \"--data-dir\" ] || exit 44\n\
+             [ -n \"$5\" ] || exit 45\n\
+             [ \"$6\" = \"--version\" ] || exit 46\n\
+             printf '%s\\n' '{}'\n",
+            entrypoint.display(),
+            version
+        );
+        std::fs::write(&command, script).expect("write fake CLI");
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700))
+            .expect("make fake CLI executable");
+        let data_dir = temp.path().join("data with spaces");
+
+        (temp, FilenCliRuntime::new(command, entrypoint, data_dir))
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn availability_accepts_only_the_pinned_bundled_version() {
+        let expected_version = bundled_cli_version_output();
+        let (_temp, runtime) = fake_version_cli(&expected_version);
+        let manager = CliManager::new(AppState::new(), runtime);
+        assert!(manager.check_cli_once().await);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn availability_rejects_a_stock_classic_cli() {
+        let (_temp, runtime) = fake_version_cli("Filen CLI v0.0.39");
+        let manager = CliManager::new(AppState::new(), runtime);
+        assert!(!manager.check_cli_once().await);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_version_probe_kills_the_helper() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("create fake CLI directory");
+        let command = temp.path().join("fake-node");
+        let entrypoint = temp.path().join("filen-cli.cjs");
+        let pid_file = temp.path().join("pid");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nwhile :; do :; done\n",
+            pid_file.display()
+        );
+        std::fs::write(&command, script).expect("write hanging fake CLI");
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700))
+            .expect("make fake CLI executable");
+        let runtime = FilenCliRuntime::new(command, entrypoint, temp.path().join("data"));
+        let manager = CliManager::new(AppState::new(), runtime);
+
+        assert!(
+            !manager
+                .check_cli_once_with_timeout(Duration::from_secs(1))
+                .await
+        );
+        let pid = std::fs::read_to_string(&pid_file)
+            .expect("probe wrote its pid")
+            .parse::<i32>()
+            .expect("pid is numeric");
+
+        for _ in 0..20 {
+            if unsafe { libc::kill(pid, 0) } == -1 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        panic!("timed-out helper process {pid} remained alive");
+    }
+
+    #[test]
+    fn sync_command_uses_the_injected_runtime_and_common_arguments() {
+        use std::ffi::OsString;
+
+        let runtime = FilenCliRuntime::new(
+            PathBuf::from("/Applications/Filen Menubar.app/node"),
+            PathBuf::from("/Applications/Filen Menubar.app/filen-cli.cjs"),
+            PathBuf::from("/tmp/Filen CLI Data"),
+        );
+        let manager = CliManager::new(AppState::new(), runtime);
+        let command = manager.sync_command(Path::new("/tmp/sync pairs.json"));
+        let args = command
+            .as_std()
+            .get_args()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            command.as_std().get_program(),
+            std::ffi::OsStr::new("/Applications/Filen Menubar.app/node")
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--disable-warning=DEP0169",
+                "/Applications/Filen Menubar.app/filen-cli.cjs",
+                "--skip-update",
+                "--data-dir",
+                "/tmp/Filen CLI Data",
+                "--verbose",
+                "sync",
+                "/tmp/sync pairs.json",
+                "--continuous",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_queued_after_start_prevents_a_late_process_launch() {
+        let (_temp, manager, config, pairs_path) = fake_sync_manager(
+            r#"mkdir -p "$3"
+printf '%s\n' "$$" >> "$3/pids"
+trap 'exit 0' TERM INT
+while :; do sleep 1; done"#,
+        );
+        manager.state.set_sync_state(SyncState::Scanning).await;
+
+        // Hold the transaction lock long enough to queue start first and stop
+        // second. Tokio's mutex is FIFO, so pause/logout semantics must win.
+        let gate = manager.lifecycle.lock().await;
+
+        let manager_for_start = manager.clone();
+        let config_for_start = config.clone();
+        let pairs_for_start = pairs_path.clone();
+        let (start_entered_tx, start_entered_rx) = tokio::sync::oneshot::channel();
+        let start_task = tokio::spawn(async move {
+            let _ = start_entered_tx.send(());
+            manager_for_start
+                .start_sync_with_pairs_path(&config_for_start, &pairs_for_start)
+                .await
+        });
+        start_entered_rx.await.expect("start task entered");
+        tokio::task::yield_now().await;
+
+        let manager_for_stop = manager.clone();
+        let (stop_entered_tx, stop_entered_rx) = tokio::sync::oneshot::channel();
+        let stop_task = tokio::spawn(async move {
+            let _ = stop_entered_tx.send(());
+            manager_for_stop.stop_sync().await;
+        });
+        stop_entered_rx.await.expect("stop task entered");
+        tokio::task::yield_now().await;
+        drop(gate);
+
+        start_task
+            .await
+            .expect("start task joined")
+            .expect("fake CLI started");
+        stop_task.await.expect("stop task joined");
+        assert!(!manager.is_running().await);
+
+        let pid_file = manager.runtime.data_dir().join("pids");
+        if let Some(pid) = std::fs::read_to_string(pid_file)
+            .ok()
+            .and_then(|contents| contents.lines().next()?.parse::<i32>().ok())
+        {
+            wait_for_process_exit(pid).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_start_captured_before_state_publication_cannot_override_pause() {
+        let (_temp, manager, config, pairs_path) = fake_sync_manager(
+            r#"mkdir -p "$3"
+printf '%s\n' "$$" >> "$3/pids"
+trap 'exit 0' TERM INT
+while :; do sleep 1; done"#,
+        );
+        // Startup captures its intent before publishing Scanning. A pause that
+        // arrives after that publication must invalidate the captured permit.
+        let startup_permit = manager.request_sync_start();
+        manager.state.set_sync_state(SyncState::Scanning).await;
+
+        // Pause fully completes before the startup task reaches process launch.
+        manager.stop_sync().await;
+        manager.state.set_sync_state(SyncState::Paused).await;
+        manager
+            .start_sync_with_pairs_path_if_permitted(&config, &pairs_path, startup_permit)
+            .await
+            .expect("stale startup was discarded without a spawn error");
+
+        assert!(!manager.is_running().await);
+        assert_eq!(manager.state.get_sync_state().await, SyncState::Paused);
+        assert!(!manager.runtime.data_dir().join("pids").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn concurrent_starts_join_stale_monitors_and_leave_one_process() {
+        let (_temp, manager, config, pairs_path) = fake_sync_manager(
+            r#"mkdir -p "$3"
+printf '%s\n' "$$" >> "$3/pids"
+trap 'printf "%s\n" "error: stale monitor" >&2; exit 0' TERM INT
+while :; do sleep 1; done"#,
+        );
+        manager.state.set_sync_state(SyncState::Scanning).await;
+        manager
+            .start_sync_with_pairs_path(&config, &pairs_path)
+            .await
+            .expect("initial fake CLI started");
+        let pid_file = manager.runtime.data_dir().join("pids");
+        let initial_pid = wait_for_pid_count(&pid_file, 1).await[0];
+
+        let gate = manager.lifecycle.lock().await;
+        let mut starts = Vec::new();
+        for _ in 0..2 {
+            let manager = manager.clone();
+            let config = config.clone();
+            let pairs_path = pairs_path.clone();
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            starts.push(tokio::spawn(async move {
+                let _ = entered_tx.send(());
+                manager
+                    .start_sync_with_pairs_path(&config, &pairs_path)
+                    .await
+            }));
+            entered_rx.await.expect("start task entered");
+            tokio::task::yield_now().await;
+        }
+        drop(gate);
+
+        for start in starts {
+            start
+                .await
+                .expect("start task joined")
+                .expect("replacement fake CLI started");
+        }
+
+        let mut observed_pids = Vec::new();
+        for _ in 0..100 {
+            observed_pids = std::fs::read_to_string(&pid_file)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| line.parse::<i32>().ok())
+                .collect();
+            if observed_pids.len() >= 2
+                && observed_pids
+                    .iter()
+                    .filter(|pid| process_is_alive(**pid))
+                    .count()
+                    == 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        assert!(!process_is_alive(initial_pid));
+        assert_eq!(
+            observed_pids
+                .iter()
+                .filter(|pid| process_is_alive(**pid))
+                .count(),
+            1,
+            "only the newest generation may remain alive"
+        );
+        assert!(manager.is_running().await);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(manager.state.get_sync_state().await, SyncState::Scanning);
+
+        manager.stop_sync().await;
+        manager.state.set_sync_state(SyncState::Paused).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(manager.state.get_sync_state().await, SyncState::Paused);
+        for pid in observed_pids {
+            wait_for_process_exit(pid).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn natural_child_exit_is_reaped_and_clears_running() {
+        let (_temp, manager, config, pairs_path) = fake_sync_manager(
+            r#"mkdir -p "$3"
+printf '%s\n' "$$" > "$3/pids"
+exit 23"#,
+        );
+        manager.state.set_sync_state(SyncState::Scanning).await;
+        manager
+            .start_sync_with_pairs_path(&config, &pairs_path)
+            .await
+            .expect("fake CLI started");
+
+        let pid_file = manager.runtime.data_dir().join("pids");
+        let pid = wait_for_pid_count(&pid_file, 1).await[0];
+        for _ in 0..100 {
+            if !manager.is_running().await
+                && manager.state.get_sync_state().await == SyncState::Error
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        assert!(!manager.is_running().await);
+        assert_eq!(manager.state.get_sync_state().await, SyncState::Error);
+        wait_for_process_exit(pid).await;
+        assert!(
+            manager.retry_sync_permit().is_some(),
+            "a natural crash must preserve desired-running intent for retry"
+        );
+        manager.stop_sync().await;
     }
 
     #[tokio::test]

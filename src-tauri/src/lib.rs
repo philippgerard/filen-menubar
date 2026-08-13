@@ -16,13 +16,13 @@ pub mod state;
 use actions::ActionContext;
 use activity::{default_activity_path, ActivityHistory};
 use activity_view::ActivityCommandContext;
-use cli::CliManager;
+use cli::{bundled_cli_version, CliManager, FilenCliRuntime};
 use config::Config;
 use credentials::CredentialManager;
 use login::{LoginCommandContext, LoginManager};
 use state::{AppState, StateSnapshot, SyncState};
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{path::BaseDirectory, Manager};
 use tokio::sync::{mpsc, watch};
 use tray::{TrayAction, TrayInterface};
 
@@ -47,29 +47,17 @@ fn init_locale(config: &Config) {
 /// Handle tray menu actions by dispatching to the appropriate handler
 async fn handle_tray_action(
     action: TrayAction,
-    app_state: &AppState,
-    cli_manager: &CliManager,
-    config: &Config,
-    tray: &Arc<dyn TrayInterface>,
+    ctx: &ActionContext<'_>,
     app_handle: &tauri::AppHandle,
     login_manager: &LoginManager,
 ) {
-    // Create action context for handlers that need full context
-    let ctx = ActionContext {
-        app_state,
-        cli_manager,
-        config,
-        tray,
-        app_handle,
-    };
-
     match action {
-        TrayAction::OpenFolder => actions::open_folder(config),
+        TrayAction::OpenFolder => actions::open_folder(ctx.config),
         TrayAction::OpenWebUI => actions::open_web_ui(),
-        TrayAction::Login => actions::login(&ctx).await,
-        TrayAction::LoginCompleted => actions::login_completed(&ctx).await,
-        TrayAction::Logout => actions::logout(&ctx).await,
-        TrayAction::TogglePause => actions::toggle_pause(&ctx).await,
+        TrayAction::Login => actions::login(ctx).await,
+        TrayAction::LoginCompleted => actions::login_completed(ctx).await,
+        TrayAction::Logout => actions::logout(ctx).await,
+        TrayAction::TogglePause => actions::toggle_pause(ctx).await,
         TrayAction::RecentActivity => actions::show_recent_activity(app_handle),
         TrayAction::Settings => actions::open_settings(),
         TrayAction::ShowLogs => actions::show_logs(),
@@ -77,7 +65,7 @@ async fn handle_tray_action(
         TrayAction::CheckForUpdates => actions::check_for_updates(app_handle).await,
         TrayAction::Quit => {
             login_manager.cancel();
-            actions::quit(cli_manager, app_handle).await;
+            actions::quit(ctx.cli_manager, app_handle).await;
         }
     }
 }
@@ -170,7 +158,6 @@ fn install_termination_signal_handler(
 /// - Auto-retry logic for offline state (every 30s)
 /// - Auto-restart logic for error state with exponential backoff
 async fn status_update_loop(
-    app_state: AppState,
     // Subscribed by the caller BEFORE this task is spawned, so state changes
     // notified during startup cannot be missed
     mut state_rx: watch::Receiver<StateSnapshot>,
@@ -245,9 +232,13 @@ async fn status_update_loop(
                     if offline_ticks >= 60 {
                         offline_ticks = 0;
                         log::info!("Attempting to reconnect after offline state...");
-                        app_state.set_sync_state(SyncState::Scanning).await;
-                        if let Err(e) = cli_manager.start_sync(&config).await {
-                            log::debug!("Reconnect attempt failed: {}", e);
+                        if let Some(permit) = cli_manager.retry_sync_permit() {
+                            if let Err(e) = cli_manager
+                                .start_sync_if_permitted(&config, permit)
+                                .await
+                            {
+                                log::debug!("Reconnect attempt failed: {}", e);
+                            }
                         }
                     }
                 }
@@ -271,9 +262,13 @@ async fn status_update_loop(
                         // Reset happens when a sync cycle completes (Synced).
                         error_restart_delay_secs =
                             (error_restart_delay_secs * 2).min(MAX_ERROR_RESTART_DELAY_SECS);
-                        app_state.set_sync_state(SyncState::Scanning).await;
-                        if let Err(e) = cli_manager.start_sync(&config).await {
-                            log::warn!("Restart attempt failed: {}", e);
+                        if let Some(permit) = cli_manager.retry_sync_permit() {
+                            if let Err(e) = cli_manager
+                                .start_sync_if_permitted(&config, permit)
+                                .await
+                            {
+                                log::warn!("Restart attempt failed: {}", e);
+                            }
                         }
                     }
                 }
@@ -330,26 +325,15 @@ pub fn run() {
             ActivityHistory::in_memory()
         }
     });
-    let cli_manager = Arc::new(CliManager::with_activity(
-        app_state.clone(),
-        activity_history.clone(),
-    ));
-
     // Create action channel
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<TrayAction>();
-    let login_manager = Arc::new(LoginManager::new());
-    let login_context = LoginCommandContext::new(login_manager.clone(), action_tx.clone());
-    let activity_context = ActivityCommandContext::new(activity_history.clone());
 
     // Store shared state for the action handler
     let config_clone = config.clone();
     let app_state_clone = app_state.clone();
-    let cli_manager_clone = cli_manager.clone();
     let activity_history_clone = activity_history.clone();
 
     tauri::Builder::default()
-        .manage(login_context.clone())
-        .manage(activity_context)
         .invoke_handler(tauri::generate_handler![
             activity_view::activity_copy,
             activity_view::recent_activity,
@@ -366,6 +350,81 @@ pub fn run() {
             activity_view::handle_window_event(window, event);
         })
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            let cli_program = {
+                #[cfg(debug_assertions)]
+                {
+                    let development_node = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("generated/filen-cli-node");
+                    if development_node.exists() {
+                        development_node
+                    } else {
+                        std::env::current_exe()?
+                            .parent()
+                            .and_then(std::path::Path::parent)
+                            .ok_or_else(|| {
+                                std::io::Error::other("app executable has no Contents directory")
+                            })?
+                            .join("Helpers/filen-menubar-cli")
+                    }
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    std::env::current_exe()?
+                        .parent()
+                        .and_then(std::path::Path::parent)
+                        .ok_or_else(|| {
+                            std::io::Error::other("app executable has no Contents directory")
+                        })?
+                        .join("Helpers/filen-menubar-cli")
+                }
+            };
+            #[cfg(target_os = "linux")]
+            let cli_program = {
+                #[cfg(debug_assertions)]
+                {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("generated/filen-cli-node")
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    app.path()
+                        .resolve("filen-cli/node", BaseDirectory::Resource)?
+                }
+            };
+            let cli_entrypoint = app
+                .path()
+                .resolve("filen-cli/filen-cli.cjs", BaseDirectory::Resource)?;
+            let cli_data_dir = CredentialManager::default_data_dir().ok_or_else(|| {
+                std::io::Error::other("could not determine the Filen CLI data directory")
+            })?;
+            let credentials = Arc::new(CredentialManager::new(cli_data_dir.clone()));
+            credentials.ensure_data_dir()?;
+            let cli_runtime = FilenCliRuntime::new(
+                cli_program,
+                cli_entrypoint,
+                cli_data_dir.clone(),
+            );
+            log::info!(
+                "Configured bundled Filen CLI {} with Node {} and entrypoint {} using data directory {}",
+                bundled_cli_version(),
+                cli_runtime.command().display(),
+                cli_runtime.entrypoint().display(),
+                cli_runtime.data_dir().display()
+            );
+
+            let cli_manager = Arc::new(CliManager::with_activity(
+                app_state_clone.clone(),
+                activity_history_clone.clone(),
+                cli_runtime.clone(),
+            ));
+            let login_manager = Arc::new(LoginManager::new(cli_runtime));
+            app.manage(LoginCommandContext::new(
+                login_manager.clone(),
+                action_tx.clone(),
+            ));
+            app.manage(ActivityCommandContext::new(activity_history_clone.clone()));
+
             // Create the tray icon
             // On Linux with ksni 0.3, the spawn is async, so we need block_on
             #[cfg(target_os = "linux")]
@@ -379,8 +438,6 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let config = config_clone.clone();
             let app_state = app_state_clone.clone();
-            let cli_manager = cli_manager_clone.clone();
-            let login_manager = login_manager.clone();
             let activity_history = activity_history_clone.clone();
             // Subscribe before any startup sync can emit activity so neither
             // persistence nor an open window can miss the first mutation.
@@ -410,15 +467,21 @@ pub fn run() {
             let config_for_handler = config.clone();
             let app_handle_for_handler = app_handle.clone();
             let login_manager_for_handler = login_manager.clone();
+            let credentials_for_handler = credentials.clone();
 
             tauri::async_runtime::spawn(async move {
                 while let Some(action) = action_rx.recv().await {
+                    let ctx = ActionContext {
+                        app_state: &app_state_for_handler,
+                        cli_manager: &cli_manager_for_handler,
+                        config: &config_for_handler,
+                        credentials: &credentials_for_handler,
+                        tray: &tray_for_handler,
+                        app_handle: &app_handle_for_handler,
+                    };
                     handle_tray_action(
                         action,
-                        &app_state_for_handler,
-                        &cli_manager_for_handler,
-                        &config_for_handler,
-                        &tray_for_handler,
+                        &ctx,
                         &app_handle_for_handler,
                         &login_manager_for_handler,
                     )
@@ -428,13 +491,11 @@ pub fn run() {
 
             // Spawn status update loop
             let tray_for_status = tray.clone();
-            let app_state_for_status = app_state.clone();
             let cli_manager_for_status = cli_manager.clone();
             let config_for_status = config.clone();
 
             tauri::async_runtime::spawn(async move {
                 status_update_loop(
-                    app_state_for_status,
                     state_rx,
                     tray_for_status,
                     cli_manager_for_status,
@@ -448,56 +509,46 @@ pub fn run() {
             let cli_manager_for_autostart = cli_manager.clone();
             let config_for_autostart = config.clone();
             let tray_for_autostart = tray.clone();
+            let credentials_for_autostart = credentials.clone();
 
             tauri::async_runtime::spawn(async move {
-                use tokio::time::{timeout, Duration};
-
                 log::info!("Starting initialization check...");
 
-                // Wrap entire initialization in a timeout to prevent hanging forever
-                // Note: CLI retry logic can take up to 14s (0+2+4+8), so allow extra buffer
-                let init_result = timeout(Duration::from_secs(30), async {
-                    // Check if CLI is available
-                    log::info!("Checking CLI availability...");
-                    let cli_available = CliManager::is_cli_available().await;
-                    log::info!("CLI availability check complete: {}", cli_available);
+                // Check if CLI is available. The probe owns its five-second
+                // timeout and kills the child on timeout.
+                log::info!("Checking CLI availability...");
+                let cli_available = cli_manager_for_autostart.is_cli_available().await;
+                log::info!("CLI availability check complete: {}", cli_available);
 
-                    if !cli_available {
-                        log::error!(
-                            "Filen CLI not found. Please install it with: npm install -g @filen/cli"
-                        );
-                        return (SyncState::CliNotFound, None);
-                    }
-
+                let (new_state, login_state) = if !cli_available {
+                    log::error!("Bundled Filen CLI is missing or has the wrong version");
+                    (SyncState::CliNotFound, None)
+                } else {
                     // Check for stored CLI session (a few quick file stats)
                     log::info!("Checking credentials...");
-                    let credentials_exist = CredentialManager::exists();
+                    let credentials_exist = credentials_for_autostart.exists();
                     log::info!("Credentials exist: {}", credentials_exist);
 
-                    if credentials_exist {
-                        if config_for_autostart.auto_start {
-                            log::info!("Found Filen CLI session, will auto-start sync");
-                            // Start with Scanning - CLI will update to Syncing when it finds deltas
-                            (SyncState::Scanning, Some(true))
-                        } else {
-                            log::info!("Found Filen CLI session, but auto_start is disabled");
-                            (SyncState::Synced, Some(true))
-                        }
-                    } else {
+                    if !credentials_exist {
                         log::info!("No Filen CLI session found");
                         (SyncState::NotLoggedIn, Some(false))
-                    }
-                })
-                .await;
-
-                // Apply the result (or fallback on timeout)
-                let (new_state, login_state) = match init_result {
-                    Ok(result) => result,
-                    Err(_) => {
-                        log::error!("Initialization timed out, defaulting to NotLoggedIn");
-                        (SyncState::NotLoggedIn, Some(false))
+                    } else if config_for_autostart.auto_start {
+                        log::info!("Found Filen CLI session, will auto-start sync");
+                        // Start with Scanning - CLI will update to Syncing when it finds deltas
+                        (SyncState::Scanning, Some(true))
+                    } else {
+                        log::info!("Found Filen CLI session, but auto_start is disabled");
+                        (SyncState::Synced, Some(true))
                     }
                 };
+                // Capture auto-start intent before publishing Scanning. If a
+                // user pauses or logs out after seeing that state, stop_sync
+                // invalidates this permit and the later launch is discarded.
+                let startup_sync_permit = matches!(
+                    new_state,
+                    SyncState::Scanning | SyncState::Syncing
+                )
+                .then(|| cli_manager_for_autostart.request_sync_start());
 
                 log::info!(
                     "Setting state to: {:?}, login_state: {:?}",
@@ -523,9 +574,9 @@ pub fn run() {
                 log::info!("Initialization complete, state: {:?}", new_state);
 
                 // Start sync if needed (after state is set)
-                if new_state == SyncState::Scanning || new_state == SyncState::Syncing {
+                if let Some(permit) = startup_sync_permit {
                     if let Err(e) = cli_manager_for_autostart
-                        .start_sync(&config_for_autostart)
+                        .start_sync_if_permitted(&config_for_autostart, permit)
                         .await
                     {
                         log::error!("Failed to auto-start sync: {}", e);

@@ -1,10 +1,14 @@
 {
   "name": "filen-menubar",
   "private": true,
-  "version": "0.1.32",
+  "version": "0.1.33",
   "type": "module",
   "scripts": {
-    "check": "npm run check:fmt && npm run check:clippy && npm test && npm run test:arch && npm run test:workflows",
+    "build:filen-cli": "bash scripts/build-filen-cli.sh",
+    "precheck": "npm run build:filen-cli",
+    "check": "npm run check:version && npm run check:filen-cli && npm run check:fmt && npm run check:clippy && npm test && npm run test:arch && npm run test:workflows",
+    "check:version": "bash scripts/check-version-sync.sh",
+    "check:filen-cli": "node --test scripts/license-evidence.test.mjs && bash scripts/check-filen-cli-version.sh && bash scripts/check-filen-cli-state-patch.sh && node scripts/validate-filen-cli-compliance.mjs",
     "check:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml",
     "check:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
@@ -13,6 +17,12 @@
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4"
+    "@cyclonedx/cyclonedx-library": "10.1.1",
+    "@tauri-apps/cli": "^2.11.4",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "ajv-formats-draft2019": "1.6.1",
+    "packageurl-js": "2.0.1",
+    "spdx-expression-parse": "4.0.0"
   }
 }

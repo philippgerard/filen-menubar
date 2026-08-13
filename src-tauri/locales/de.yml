@@ -32,7 +32,7 @@ status:
   syncing: "Synchronisiere"
   paused: "Pausiert"
   error: "Synchronisierungsfehler"
-  cli_not_found: "CLI nicht gefunden"
+  cli_not_found: "Sync-Backend fehlt"
   offline: "Offline"
 
 # Tooltips
@@ -70,8 +70,8 @@ login:
   password_label: "Passwort"
   password_placeholder: "Passwort eingeben"
   persist_note: "Ihre Sitzung wird von der Filen-CLI verschlüsselt und durch den Systemschlüsselbund geschützt."
-  alternative_title: "Dieses Fenster ist optional"
-  alternative_note: "Alternativ können Sie es schließen und „filen“ oder „filen-cli“ im Terminal ausführen. Bestätigen Sie das Speichern mit „y“; Filen Menubar verwendet dann diese Anmeldung."
+  alternative_title: "Integrierte Anmeldung"
+  alternative_note: "Die Anmeldung erfolgt lokal über die mitgelieferte Filen-CLI. Eine separate CLI-Installation oder ein Terminal-Schritt ist nicht erforderlich."
   submit: "Anmelden"
   cancel: "Abbrechen"
   authenticating: "Anmeldung läuft..."

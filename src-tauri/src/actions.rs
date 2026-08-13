@@ -36,6 +36,7 @@ pub struct ActionContext<'a> {
     pub app_state: &'a AppState,
     pub cli_manager: &'a CliManager,
     pub config: &'a Config,
+    pub credentials: &'a CredentialManager,
     pub tray: &'a Arc<dyn TrayInterface>,
     pub app_handle: &'a tauri::AppHandle,
 }
@@ -60,7 +61,7 @@ pub fn open_web_ui() {
 pub async fn login(ctx: &ActionContext<'_>) {
     log::info!("Login requested");
 
-    if CredentialManager::exists() {
+    if ctx.credentials.exists() {
         log::info!("Found Filen CLI session, starting sync");
         start_authenticated_sync(ctx).await;
     } else {
@@ -193,7 +194,7 @@ pub async fn logout(ctx: &ActionContext<'_>) {
     if confirmed {
         log::info!("Logout confirmed");
         ctx.cli_manager.stop_sync().await;
-        let _ = CredentialManager::delete();
+        let _ = ctx.credentials.delete();
         ctx.app_state.set_logged_in(false).await;
         ctx.app_state.set_sync_state(SyncState::NotLoggedIn).await;
         ctx.tray.set_login_state(Some(false));
@@ -286,7 +287,8 @@ pub fn show_about(app_handle: &tauri::AppHandle) {
         "Version {}\n\n\
          A lightweight menubar app for Filen cloud sync.\n\n\
          Author: Philipp Gerard\n\
-         License: MIT\n\n\
+         License: MIT\n\
+         Bundled Filen CLI backend: AGPL-3.0\n\n\
          https://github.com/philippgerard/filen-menubar",
         version
     );
@@ -394,6 +396,7 @@ mod tests {
             app_state: &AppState,
             cli_manager: &CliManager,
             config: &Config,
+            credentials: &CredentialManager,
             tray: &Arc<dyn TrayInterface>,
             app_handle: &tauri::AppHandle,
         ) {
@@ -401,6 +404,7 @@ mod tests {
                 app_state,
                 cli_manager,
                 config,
+                credentials,
                 tray,
                 app_handle,
             };
@@ -408,6 +412,7 @@ mod tests {
             let _: &AppState = ctx.app_state;
             let _: &CliManager = ctx.cli_manager;
             let _: &Config = ctx.config;
+            let _: &CredentialManager = ctx.credentials;
             let _: &Arc<dyn TrayInterface> = ctx.tray;
             let _: &tauri::AppHandle = ctx.app_handle;
         }

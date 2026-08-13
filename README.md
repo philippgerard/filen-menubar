@@ -8,48 +8,62 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 
 - **Tray-first interface** - Stays out of the Dock/taskbar; the only app window is the optional sign-in flow
 - **In-app login** - Sign in, complete two-factor authentication, and persist the Filen CLI session without opening a terminal
-- **CLI-owned credentials** - Credentials are sent to the installed CLI through a pseudo-terminal, never through process arguments, environment variables, or application logs
+- **CLI-owned credentials** - Credentials are sent to the bundled CLI through a pseudo-terminal, never through process arguments, environment variables, or application logs
 - **Real-time sync status** - Shows current sync state with live file count updates
 - **Live menu updates** - Menu items update in-place without closing the menu
 - **Recent activity** - Review the latest uploads, downloads, removals, and other file operations
 - **Native platform styling** - A macOS-style login window on macOS and a KDE/Plasma-style window on Linux
 - **Cross-platform tray support** - Tauri's native tray on macOS and StatusNotifierItem (SNI) via `ksni` on Linux
 - **Auto-sync** - Optionally start syncing on launch
+- **Bundled sync engine** - Ships a pinned classic CLI patched with the newer Filen sync engine's memory fixes
 - **Logout confirmation** - Prevents accidental logout with a confirmation dialog
 - **Update check** - Manually check GitHub for a newer release from the tray menu
 
 ## Requirements
 
-### Filen CLI
+### Bundled Filen CLI
 
-This app wraps the classic [Filen CLI](https://github.com/FilenCloudDienste/filen-cli)
-and is currently tested with v0.0.36. Install it first:
+No separate Filen CLI or Node.js runtime is required after installation. The
+app bundles `v0.0.39-menubar.2`: a focused build of classic CLI v0.0.39 with
+`@filen/sync` v0.3.7 and `@filen/sdk` v0.4.2. It runs on an app-owned copy of
+the official Node.js v24.18.1 runtime. Neither the helper nor this Node.js
+runtime is resolved from `PATH`: the runtime stays private to the application
+bundle on macOS and under `/usr/lib/Filen Menubar/filen-cli/` in Linux packages.
 
-```bash
-npm install -g @filen/cli
-```
+The newer sync engine bounds large tree-building work, avoids deep-cloning
+complete trees, and uses a more compact persisted state. The fork also stops
+retaining an unused in-memory CLI log during continuous sync and omits ignored-
+tree inventories that the menubar does not consume when no explicit CLI log
+file is requested. A transient realtime-socket error now follows the SDK's
+reconnect path instead of terminating the sync process. Unused drive, S3, and
+WebDAV commands and their dependencies are excluded from the bundled build.
+Its self-updater is disabled; app releases update the host, helper, and runtime
+together.
 
-Verify installation:
+The pinned inputs, patches, resolved dependency graph, license information, and
+release-compliance tooling live under `third-party/filen-cli/`. Release assets
+also include corresponding source, a software bill of materials (SBOM), and
+third-party notices.
 
-```bash
-filen --version
-```
-
-Filen Menubar can guide you through the Filen CLI login from its tray menu.
-If you prefer not to enter credentials in the app window, run `filen` or
-`filen-cli` in a terminal and answer `y` when asked to keep the session. Filen
-Menubar detects and uses that same saved CLI session.
+Existing classic-CLI sessions are reused, so upgrades do not require signing in
+again. Do not run an older continuous-sync CLI against the same sync pair while
+Filen Menubar is running. Its compact sync cache is isolated under `state/v3`,
+leaving an older classic CLI's `state/v2` cache untouched for rollback. The
+first patched run therefore performs a full tree scan.
 
 ### Build Dependencies
 
 - [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) (v18+)
+- [Node.js](https://nodejs.org/) (v20+)
+- [Bun](https://bun.sh/) v1.3.14 (exact version, build and test tool only)
 - [Tauri CLI](https://tauri.app/)
 
 **macOS:**
 ```bash
 xcode-select --install
 ```
+
+Release builds currently target Apple silicon and require macOS 13.5 or newer.
 
 **Linux (Debian/Ubuntu):**
 ```bash
@@ -72,6 +86,9 @@ sudo pacman -S webkit2gtk-4.1 libappindicator-gtk3 librsvg base-devel \
 
 > **Note:** The `webkit2gtk-4.1` package is essential - it provides `javascriptcoregtk-4.1` required by Tauri.
 
+Linux release builds target x86_64, require glibc 2.34 or newer, and bundle the
+Node.js runtime used by the sync backend.
+
 ## Installation
 
 ### Pre-built Binaries
@@ -87,7 +104,7 @@ Download the latest release from the [Releases](https://github.com/philippgerard
 
 ```bash
 # Install the deb package
-sudo dpkg -i filen-menubar_*.deb
+sudo dpkg -i ./Filen.Menubar_*_amd64.deb
 
 # Install any missing dependencies
 sudo apt-get install -f
@@ -97,10 +114,10 @@ sudo apt-get install -f
 
 ```bash
 # Install the rpm package
-sudo rpm -i filen-menubar-*.rpm
+sudo rpm -i ./Filen.Menubar-*.rpm
 
 # Or with dnf
-sudo dnf install filen-menubar-*.rpm
+sudo dnf install ./Filen.Menubar-*.rpm
 ```
 
 ### Linux (Arch/CachyOS/Manjaro)
@@ -108,12 +125,12 @@ sudo dnf install filen-menubar-*.rpm
 Install from the AUR with your usual helper:
 
 ```bash
-paru -S filen-menubar-bin filen-cli-bin   # or: yay -S ...
+paru -S filen-menubar-bin   # or: yay -S ...
 ```
 
-`filen-cli-bin` is the sync backend. It is a standalone binary, so unlike the
-npm route it pulls in no Node.js — you can skip `npm install -g @filen/cli`
-entirely on Arch.
+The patched sync backend is included in `filen-menubar-bin`; there is no
+separate CLI or system Node.js runtime dependency. The AUR package supports
+x86_64 and carries the same app-owned runtime as the release `.deb`.
 
 This is the recommended route: pacman owns the files, so `pacman -Qo` works and
 updates arrive with your normal `paru -Sua`. The package repacks the release
@@ -143,9 +160,11 @@ cd filen-menubar
 ```
 
 This will:
-- Install all build dependencies
+- Install missing distro build dependencies (Bun must already be installed at
+  the exact version listed above)
 - Build the application
-- Install binary to `/usr/local/bin`
+- Install the host executable to `/usr/local/bin` and its private sync backend
+  under `/usr/local/lib/Filen Menubar/`
 - Create desktop entry and icons
 - Configure autostart on login
 
@@ -161,7 +180,7 @@ Or build manually:
 sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
   libappindicator-gtk3 librsvg nodejs npm rust
 
-# Clone and build
+# Install Bun v1.3.14, then clone and build
 git clone https://github.com/philippgerard/filen-menubar.git
 cd filen-menubar
 npm ci
@@ -171,7 +190,10 @@ npm run tauri build
 # Binary will be in src-tauri/target/release/filen-menubar
 ```
 
-> **Note:** AppImage is not supported due to sandboxing issues with accessing the Filen CLI.
+The build fails closed if Bun is missing or is not exactly v1.3.14.
+
+> **Note:** AppImage is not supported because its sandboxing prevents reliable
+> access to the bundled sync-backend resources.
 
 #### Install Script Options
 
@@ -273,14 +295,13 @@ sync root are stored. Use **Clear** in the activity window to remove the history
 3. **Sign in:** Enter your Filen credentials and, when required, your two-factor code
 4. **Sync:** The login window closes and syncing starts automatically
 
-The login window is optional. To authenticate manually instead, close it and
-run `filen` or `filen-cli` in a terminal. Answer `y` when the CLI asks whether
-to keep you logged in, then relaunch Filen Menubar or choose **Login...** again.
+The app uses its bundled backend for authentication as well as syncing, so the
+tray login is the supported sign-in path.
 
 ### Login Security
 
 The sign-in screen is a local page bundled with Filen Menubar, not a hosted
-Filen website. The app starts the installed Filen CLI in a pseudo-terminal and
+Filen website. The app starts its bundled Filen CLI in a pseudo-terminal and
 responds to its normal interactive prompts:
 
 - The CLI receives email, password, and two-factor codes through its standard
@@ -295,7 +316,7 @@ responds to its normal interactive prompts:
 For two-factor-enabled accounts, Filen may send one failed-login alert followed
 by the successful-login alert. The classic CLI first submits the password to
 learn that a two-factor code is required, then submits the complete login. The
-same behavior occurs during a manual interactive CLI login.
+bundled login uses that same upstream authentication flow.
 
 ### Menu Options
 
@@ -367,8 +388,8 @@ The tooltip updates in real-time, even while the menu is open.
 └──────────────────────┼──────────────────────────┘
                        │
               ┌────────▼────────┐
-              │   Filen CLI     │
-              │  (@filen/cli)   │
+              │ Bundled CLI fork│
+              │ @filen/sync .3.7│
               │  --verbose mode │
               └─────────────────┘
 ```
@@ -419,8 +440,12 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 
 ## Known Limitations
 
-- **CLI Dependency:** The Filen CLI must be installed; Filen Menubar can handle login after installation.
-- **CLI Migration:** The app currently targets the classic Filen CLI v0.0.36. The Rust rewrite is not yet supported and will require sync integration changes.
+- **CLI lineage:** The bundled backend remains the classic TypeScript CLI, run
+  by its app-owned Node.js runtime. The Rust rewrite is not a drop-in
+  replacement for the current continuous-sync event integration.
+- **Backend scope:** The focused helper includes the sync and interactive-login
+  surfaces used by Filen Menubar. It does not bundle the classic CLI's
+  filesystem utilities, drive, S3, or WebDAV servers.
 - **Storage Display:** The current CLI integration does not expose account storage quota.
 
 ## Development
@@ -428,10 +453,8 @@ The app runs the Filen CLI with `--verbose` flag to get JSON event output. Key e
 ### Quick Start
 
 ```bash
-# Start development (with debug logging)
-./scripts/dev.sh
-
-# Or manually
+# Install the pinned JavaScript dependencies, then start with debug logging
+npm ci
 RUST_LOG=debug npm run tauri dev
 ```
 
@@ -441,13 +464,11 @@ The `scripts/` directory contains helper scripts for common tasks:
 
 | Script | Description |
 |--------|-------------|
-| `./scripts/dev.sh` | Start development server with debug logging |
-| `./scripts/clean.sh` | Clean build cache and kill running instances |
-| `./scripts/rebuild.sh` | Clean rebuild (use after locale/compile-time changes) |
-| `./scripts/test.sh` | Run all tests |
-| `./scripts/lint.sh` | Check formatting and run clippy |
-| `./scripts/lint.sh --fix` | Auto-fix formatting issues |
-| `./scripts/release.sh` | Build production release (runs tests first) |
+| `./scripts/build-filen-cli.sh` | Build and verify the pinned bundled backend |
+| `./scripts/check-filen-cli-version.sh` | Verify the generated backend version and runtime |
+| `./scripts/check-filen-cli-state-patch.sh` | Verify the isolated state-v3 patch |
+| `./scripts/package-filen-cli-source.sh` | Create the backend corresponding-source archive |
+| `./scripts/install-linux.sh` | Build and install from source on Linux |
 | `./scripts/logs.sh` | Open log folder for current platform |
 
 ### Manual Commands
@@ -455,6 +476,9 @@ The `scripts/` directory contains helper scripts for common tasks:
 ```bash
 # Install the pinned JavaScript dependencies
 npm ci
+
+# Build the pinned patched CLI (also runs automatically before checks/builds)
+npm run build:filen-cli
 
 # Run with info logging
 RUST_LOG=info npm run tauri dev
@@ -472,14 +496,16 @@ Application versions must match in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
 `src-tauri/tauri.conf.json`.
 
-After creating a reviewed `v*` tag, dispatch the **Release** workflow from
-`main` and enter its numeric version. The workflow rejects tags that are not
-already contained in the selected `main` commit. It then:
+Create a reviewed `v*` tag and dispatch the **Release** workflow from `main`
+with its numeric version. The workflow rejects a tag whose commit is not already
+on `main` or whose five app version manifests disagree. It then:
 
-1. Runs the Rust test suite on macOS and Linux.
+1. Rebuilds and verifies the pinned CLI fork and runs the test suite on macOS
+   and Linux.
 2. Builds a signed and notarized Apple Silicon DMG.
 3. Builds Debian, RPM, and Arch Linux packages.
-4. Creates a draft GitHub release containing all artifacts.
+4. Produces corresponding source, an SBOM, third-party notices, and checksums,
+   then creates a draft GitHub release containing all artifacts.
 5. Publishes `filen-menubar-bin` to the AUR after the draft release is reviewed and published.
 
 ### Troubleshooting
@@ -489,8 +515,8 @@ already contained in the selected `main` commit. It then:
 The `rust_i18n` crate compiles translations at build time. If you modify locale files (`src-tauri/locales/*.yml`), you need a clean rebuild:
 
 ```bash
-./scripts/rebuild.sh
-./scripts/dev.sh
+cargo clean --manifest-path src-tauri/Cargo.toml
+RUST_LOG=debug npm run tauri dev
 ```
 
 ### Project Structure
@@ -521,7 +547,11 @@ src-tauri/
 
 ## License
 
-MIT
+The Filen Menubar host application is MIT-licensed. The separately executed,
+modified Filen CLI backend is AGPL-3.0-only. Its app-owned Node.js runtime is
+MIT-licensed and carries Node.js's third-party notices. Complete notices and
+corresponding source are included with release artifacts. Bun is used only as a
+pinned build/test tool and is not distributed in the application bundles.
 
 ## Acknowledgments
 

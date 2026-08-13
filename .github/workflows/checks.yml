@@ -35,11 +35,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Verify native build host
+        if: matrix.platform == 'macos-latest'
+        run: test "$(uname -m)" = arm64
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Verify Bun revision
+        run: test "$(bun --revision)" = "1.3.14+0d9b296af"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -65,23 +77,174 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            libdbus-1-dev \
+            pkg-config \
+            binutils \
+            rpm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run checks
         run: npm run check
 
+      - name: Package and smoke-rebuild corresponding source
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(bash scripts/package-filen-cli-source.sh)"
+          archive_hash="$(sha256sum "$archive" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$archive" | awk '{print $1}')"
+          [[ -n "$archive_hash" ]]
+          extracted="$RUNNER_TEMP/corresponding-source"
+          mkdir -p "$extracted"
+          tar -xzf "$archive" -C "$extracted"
+          source_root="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          NODE_BIN="$PWD/src-tauri/generated/filen-cli-node" \
+            BUN_BIN="$(command -v bun)" \
+            "$source_root/rebuild-source.sh" "$RUNNER_TEMP/rebuilt-helper"
+          cp "$archive" "$RUNNER_TEMP/"
+          cp src-tauri/generated/licenses/filen-cli/runtime.cdx.json \
+            "$RUNNER_TEMP/filen-menubar-cli-${{ matrix.target }}-runtime.cdx.json"
+          cp src-tauri/generated/licenses/filen-cli/THIRD_PARTY_NOTICES.txt \
+            "$RUNNER_TEMP/filen-menubar-cli-${{ matrix.target }}-THIRD_PARTY_NOTICES.txt"
+
       - name: Build unsigned Tauri app
         run: npm run tauri build -- --target ${{ matrix.target }} --no-sign --ci
+
+      - name: Verify macOS bundle payload
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$PWD/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"
+          helper_path="$app_path/Contents/Helpers/filen-menubar-cli"
+          runtime_path="$app_path/Contents/Resources/filen-cli"
+          addon_path="$runtime_path/node_modules/@jupiterpi/node-keyring/node-keyring.darwin-arm64.node"
+          helper_version="$(tr -d '\r\n' < third-party/filen-cli/VERSION)"
+          [[ -x "$helper_path" && -f "$runtime_path/filen-cli.cjs" && -f "$addon_path" ]]
+          [[ "$(file -b "$helper_path")" == *"arm64"* ]]
+          [[ "$("$helper_path" --version)" == "v24.18.1" ]]
+          [[ "$(NO_COLOR=1 "$helper_path" --disable-warning=DEP0169 \
+            "$runtime_path/filen-cli.cjs" --skip-update --data-dir "$RUNNER_TEMP/filen-data" --version)" == \
+            "Filen CLI ${helper_version}" ]]
+          (
+            cd "$runtime_path"
+            "$helper_path" -e \
+              'const keyring = require("@jupiterpi/node-keyring"); if (typeof keyring.getPassword !== "function") process.exit(1)'
+          )
+          for file in \
+            "$app_path/Contents/Resources/licenses/filen-menubar/MIT.txt" \
+            "$app_path/Contents/Resources/licenses/filen-cli/AGPL-3.0.txt" \
+            "$app_path/Contents/Resources/licenses/filen-cli/NODE-LICENSE.txt" \
+            "$app_path/Contents/Resources/licenses/filen-cli/THIRD_PARTY_NOTICES.txt" \
+            "$app_path/Contents/Resources/licenses/filen-cli/runtime.cdx.json"; do
+            [[ -s "$file" ]]
+          done
+          codesign --verify --strict --verbose=4 "$helper_path"
+          codesign --verify --strict --verbose=4 "$addon_path"
+          helper_signature="$(codesign -dv --verbose=4 "$helper_path" 2>&1)"
+          grep -Fq 'Identifier=io.filen.menubar.filen-cli' <<<"$helper_signature"
+          helper_entitlements="$(codesign -d --entitlements :- "$helper_path" 2>&1 || true)"
+          for forbidden in \
+            com.apple.security.cs.allow-unsigned-executable-memory \
+            com.apple.security.cs.disable-executable-page-protection; do
+            if grep -Fq "$forbidden" <<<"$helper_entitlements"; then
+              echo "helper unexpectedly has code-signing exception: $forbidden" >&2
+              exit 1
+            fi
+          done
+          grep -Fq 'com.apple.security.cs.allow-jit' <<<"$helper_entitlements"
+          helper_entitlement_keys="$(codesign -d --entitlements :- --xml "$helper_path" 2>/dev/null | \
+            plutil -convert json -o - - | \
+            python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')"
+          expected_helper_entitlement_keys="$(plutil -convert json -o - src-tauri/filen-cli.entitlements | \
+            python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')"
+          [[ "$expected_helper_entitlement_keys" == 'com.apple.security.cs.allow-jit' ]]
+          [[ "$helper_entitlement_keys" == $'com.apple.security.cs.allow-jit\ncom.apple.security.cs.disable-library-validation' ]]
+          for file in "$addon_path" "$app_path/Contents/MacOS/filen-menubar"; do
+            entitlements="$(codesign -d --entitlements :- "$file" 2>&1 || true)"
+            if grep -Fq '<key>' <<<"$entitlements"; then
+              echo "$file unexpectedly has entitlements" >&2
+              exit 1
+            fi
+          done
+          "$helper_path" -e 'if (typeof WebAssembly !== "object") process.exit(1)'
+
+      - name: Verify Linux package payloads and ABI floor
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/deb" -name '*.deb' -print -quit)"
+          rpm="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/rpm" -name '*.rpm' -print -quit)"
+          [[ -n "$deb" && -n "$rpm" ]]
+          deb_root="$RUNNER_TEMP/deb-root"
+          mkdir -p "$deb_root"
+          dpkg-deb -x "$deb" "$deb_root"
+          deb_depends="$(dpkg-deb -f "$deb" Depends)"
+          if grep -Eqi '(^|[,[:space:]])(nodejs|filen-cli)([[:space:],]|$)' <<<"$deb_depends"; then
+            echo "Debian package unexpectedly depends on an external runtime: $deb_depends" >&2
+            exit 1
+          fi
+          runtime_path="$deb_root/usr/lib/Filen Menubar/filen-cli"
+          helper_path="$runtime_path/node"
+          addon_path="$runtime_path/node_modules/@jupiterpi/node-keyring/node-keyring.linux-x64-gnu.node"
+          host_path="$deb_root/usr/bin/filen-menubar"
+          helper_version="$(tr -d '\r\n' < third-party/filen-cli/VERSION)"
+          [[ -x "$helper_path" && -x "$host_path" && -f "$runtime_path/filen-cli.cjs" && -f "$addon_path" ]]
+          [[ "$(NO_COLOR=1 "$helper_path" --disable-warning=DEP0169 \
+            "$runtime_path/filen-cli.cjs" --skip-update --data-dir "$RUNNER_TEMP/filen-data" --version)" == \
+            "Filen CLI ${helper_version}" ]]
+          (
+            cd "$runtime_path"
+            "$helper_path" -e \
+              'const keyring = require("@jupiterpi/node-keyring"); if (typeof keyring.getPassword !== "function") process.exit(1)'
+          )
+          check_glibc_floor() {
+            local file="$1" maximum
+            if readelf --dyn-syms --wide "$file" | grep -Fq '__isoc23_'; then
+              echo "$file references an unsupported __isoc23 symbol" >&2
+              exit 1
+            fi
+            maximum="$(readelf --version-info "$file" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
+            [[ -n "$maximum" ]]
+            [[ "$(printf '%s\n' "$maximum" '2.34' | sort -V | tail -1)" == '2.34' ]] || {
+              echo "$file requires GLIBC_${maximum}, above the documented GLIBC_2.34 floor" >&2
+              exit 1
+            }
+          }
+          check_glibc_floor "$host_path"
+          check_glibc_floor "$helper_path"
+          check_glibc_floor "$addon_path"
+          for file in \
+            "$deb_root/usr/lib/Filen Menubar/licenses/filen-menubar/MIT.txt" \
+            "$deb_root/usr/lib/Filen Menubar/licenses/filen-cli/AGPL-3.0.txt" \
+            "$deb_root/usr/lib/Filen Menubar/licenses/filen-cli/NODE-LICENSE.txt" \
+            "$deb_root/usr/lib/Filen Menubar/licenses/filen-cli/THIRD_PARTY_NOTICES.txt" \
+            "$deb_root/usr/lib/Filen Menubar/licenses/filen-cli/runtime.cdx.json"; do
+            [[ -s "$file" ]]
+          done
+          rpm_listing="$(rpm -qlp "$rpm")"
+          rpm_requires="$(rpm -qp --requires "$rpm")"
+          if grep -Eqi '(^|[[:space:]])(nodejs|filen-cli)([[:space:]]|$)' <<<"$rpm_requires"; then
+            echo "RPM unexpectedly depends on an external runtime: $rpm_requires" >&2
+            exit 1
+          fi
+          grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' <<<"$rpm_listing"
+          grep -Fq '/licenses/filen-cli/runtime.cdx.json' <<<"$rpm_listing"
+          [[ "$(rpm -qp --qf '%{LICENSE}' "$rpm")" == 'MIT AND AGPL-3.0-only' ]]
 
       - name: Upload macOS artifacts
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.name }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            ${{ runner.temp }}/filen-menubar-cli-*-source.tar.gz
+            ${{ runner.temp }}/filen-menubar-cli-*-runtime.cdx.json
+            ${{ runner.temp }}/filen-menubar-cli-*-THIRD_PARTY_NOTICES.txt
           if-no-files-found: error
 
       - name: Upload Linux artifacts
@@ -92,4 +255,7 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            ${{ runner.temp }}/filen-menubar-cli-*-source.tar.gz
+            ${{ runner.temp }}/filen-menubar-cli-*-runtime.cdx.json
+            ${{ runner.temp }}/filen-menubar-cli-*-THIRD_PARTY_NOTICES.txt
           if-no-files-found: error

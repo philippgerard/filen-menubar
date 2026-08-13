@@ -1,0 +1,373 @@
+diff --git a/package.json b/package.json
+index 70f69e3..e982646 100644
+--- a/package.json
++++ b/package.json
+@@ -3,6 +3,7 @@
+   "version": "0.0.0",
+   "description": "Filen CLI",
+   "main": "build/index.js",
++  "packageManager": "bun@1.3.14",
+   "type": "module",
+   "scripts": {
+     "start": "bun run src/index.ts",
+@@ -16,7 +17,7 @@
+     "filen": "build/index.js"
+   },
+   "engines": {
+-    "node": "23"
++    "node": ">=24"
+   },
+   "keywords": [
+     "filen"
+@@ -28,26 +29,30 @@
+   "author": "Filen",
+   "license": "AGPLv3",
+   "dependencies": {
+-    "@filen/network-drive": "^0.9.44",
+-    "@filen/s3": "^0.3.1",
+-    "@filen/sdk": "^0.3.10",
+-    "@filen/sync": "^0.2.1",
+-    "@filen/webdav": "^0.3.1",
++    "@filen/sdk": "0.4.2",
++    "@filen/sync": "0.3.7",
+     "@jupiterpi/node-keyring": "^0.1.1",
+     "arg": "^5.0.2",
+     "async-mutex": "^0.5.0",
+-    "cheerio": "^1.0.0",
+     "cli-progress": "^3.12.0",
+     "dateformat": "^5.0.3",
+     "dedent": "^1.5.3",
+-    "open": "^7.4.2",
+     "read": "^4.1.0",
+-    "semver": "^7.6.3",
+-    "uuid": "^11.1.0"
++    "uuid": "11.1.1"
++  },
++  "overrides": {
++    "axios": "1.19.0",
++    "elliptic": "6.6.1",
++    "follow-redirects": "1.16.0",
++    "form-data": "4.0.6",
++    "node-forge": "1.4.0"
+   },
+   "devDependencies": {
+     "@eslint/eslintrc": "^3.3.1",
+     "@eslint/js": "^9.25.1",
++    "@filen/network-drive": "^0.9.44",
++    "@filen/s3": "^0.3.1",
++    "@filen/webdav": "^0.3.1",
+     "@microsoft/eslint-formatter-sarif": "^3.1.0",
+     "@types/cli-progress": "^3.11.6",
+     "@types/dateformat": "^5.0.3",
+@@ -63,10 +68,13 @@
+     "rimraf": "^6.0.1",
+     "tsx": "^4.19.2",
+     "typescript": "^5.5.4",
+-    "@types/bun": "latest"
++    "@types/bun": "latest",
++    "cheerio": "^1.0.0",
++    "open": "^7.4.2",
++    "semver": "^7.6.3"
+   },
+   "patchedDependencies": {
+-    "@jupiterpi/node-keyring@0.1.1": "patches/@jupiterpi%2Fnode-keyring@0.1.1.patch",
+-    "@parcel/watcher@2.5.1": "patches/@parcel%2Fwatcher@2.5.1.patch"
++    "@filen/sync@0.3.7": "patches/@filen%2Fsync@0.3.7.patch",
++    "@jupiterpi/node-keyring@0.1.1": "patches/@jupiterpi%2Fnode-keyring@0.1.1.patch"
+   }
+ }
+diff --git a/src/app/app.ts b/src/app/app.ts
+index 09a853a..e218fa2 100644
+--- a/src/app/app.ts
++++ b/src/app/app.ts
+@@ -3,16 +3,11 @@ import { FilenSDK, FilenSDKConfig } from "@filen/sdk"
+ import path from "path"
+ import os from "os"
+ import { isRunningAsContainer, isRunningAsNPMPackage, version } from "../buildInfo"
+-import { canaryCommand, installCommand, runUpdater, updateHelpText } from "./updater"
+ import { CloudPath } from "./util/cloudPath"
+-import { authenticate, authenticationCommandGroup } from "./auth"
++import { authenticate } from "./auth"
+ import { formatTable } from "../framework/util"
+ import dedent from "dedent"
+-import { fsCommands } from "./featureInterfaces/fs"
+ import { syncCommand } from "./featureInterfaces/syncInterface"
+-import { driveMountingCommand } from "./featureInterfaces/driveMountingInterface"
+-import { webdavCommandGroup } from "./featureInterfaces/webdavInterface"
+-import { s3Command } from "./featureInterfaces/s3Interface"
+ import { f } from "./f"
+ 
+ export const app = (argv: string[], adapter: InterfaceAdapter) => f.app({
+@@ -21,7 +16,6 @@ export const app = (argv: string[], adapter: InterfaceAdapter) => f.app({
+ 		version
+ 	},
+ 	features: [
+-		{ features: [canaryCommand, installCommand], visibility: "hide" },
+ 		f.helpText({ name: "general", text: dedent`
+ 			Usage: filen [options...] [cmd]
+ 
+@@ -45,14 +39,8 @@ export const app = (argv: string[], adapter: InterfaceAdapter) => f.app({
+ 				["--log-file <file>", "write logs to a file"]
+ 			])}
+ 		` }),
+-		{ ...authenticationCommandGroup, visibility: "collapse" },
+-		{ ...updateHelpText, visibility: "collapse" },
+ 		f.helpText({ name: undefined, text: "List of commands:" }),
+-		{ ...fsCommands, visibility: "collapse" },
+ 		{ title: "Syncing", features: [syncCommand], visibility: "collapse" },
+-		{ title: "Network drive mounting", features: [driveMountingCommand], visibility: "collapse" },
+-		{ ...webdavCommandGroup, visibility: "collapse" },
+-		{ title: "S3 server", features: [s3Command], visibility: "collapse" },
+ 	],
+ 	argv, adapter,
+ 	defaultCtx: {
+@@ -72,8 +60,6 @@ export const app = (argv: string[], adapter: InterfaceAdapter) => f.app({
+ 			password: f.option({ name: "--password", alias: "-p", description: "your Filen account's password", valueName: "password" }),
+ 			twoFactorCode: f.option({ name: "--two-factor-code", alias: "-c", description: "your Filen account's two-factor authentication code", valueName: "2fa" }),
+ 			skipUpdate: f.flag({ name: "--skip-update", description: "skip checking for updates" }),
+-			forceUpdate: f.flag({ name: "--force-update", description: "check for updates even if it was recently checked" }),
+-			autoUpdate: f.flag({ name: "--auto-update", description: "skip the confirmation prompt and update automatically (will still exit after updating)" }),
+ 			rootPath: f.option({ name: "--root", alias: "-r", description: "to execute a stateless command from a different cloud working directory", valueName: "path" }),
+ 		},
+ 		invoke: async (ctx) => {
+@@ -89,9 +75,6 @@ export const app = (argv: string[], adapter: InterfaceAdapter) => f.app({
+ 			if (app.isDevelopment) environment += ", development"
+ 			app.outVerbose(environment)
+ 
+-			// check for updates
+-			await runUpdater(ctx, args)
+-
+ 			// authentication
+ 			const selectedFeature = cmd === undefined ? undefined : app.features.findFeature(argv.join(" "))?.feature
+ 			if (!selectedFeature?.skipAuthentication && !selectedFeature?.builtin) {
+@@ -131,4 +114,4 @@ export const ANONYMOUS_SDK_CONFIG: FilenSDKConfig = {
+ 	authVersion: 2,
+ 	baseFolderUUID: "anonymous",
+ 	userId: 1
+-} as const
+\ No newline at end of file
++} as const
+diff --git a/src/app/featureInterfaces/s3Interface.ts b/src/app/featureInterfaces/s3Interface.ts
+index a282bac..d7d443b 100644
+--- a/src/app/featureInterfaces/s3Interface.ts
++++ b/src/app/featureInterfaces/s3Interface.ts
+@@ -37,7 +37,9 @@ export const s3Command = f.feature({
+ 				}
+ 				const threads = args.threads ?? 0
+ 				const s3Server = args.threads === undefined
++					// @ts-expect-error @filen/s3 still declares its own older SDK instance
+ 					? new S3Server(configuration)
++					// @ts-expect-error @filen/s3 still declares its own older SDK instance
+ 					: new S3ServerCluster({ ...configuration, threads: threads !== 0 ? threads : undefined })
+ 				await s3Server.start()
+ 				let location = `${https ? "https" : "http"}://${hostname}:${port}`
+@@ -53,4 +55,4 @@ export const s3Command = f.feature({
+ 			}
+ 		})
+ 	}
+-})
+\ No newline at end of file
++})
+diff --git a/src/app/featureInterfaces/syncInterface.ts b/src/app/featureInterfaces/syncInterface.ts
+index b1a02bb..828b756 100644
+--- a/src/app/featureInterfaces/syncInterface.ts
++++ b/src/app/featureInterfaces/syncInterface.ts
+@@ -10,6 +10,21 @@ import { f, X } from "../f"
+ import dedent from "dedent"
+ import { App } from "../../framework/app"
+ 
++type VerboseSyncOutput = {
++	readonly isFileLoggingEnabled: boolean
++	outVerbose(message: string): void
++}
++
++export function shouldOutputVerboseSyncMessage(message: Pick<SyncMessage, "type">, isFileLoggingEnabled: boolean): boolean {
++	return isFileLoggingEnabled || (message.type !== "localTreeIgnored" && message.type !== "remoteTreeIgnored")
++}
++
++export function outputVerboseSyncMessage(app: VerboseSyncOutput, message: SyncMessage) {
++	if (shouldOutputVerboseSyncMessage(message, app.isFileLoggingEnabled)) {
++		app.outVerbose(JSON.stringify(message, null, 2))
++	}
++}
++
+ export const syncCommand = f.feature({
+ 	cmd: ["sync"],
+ 	description: "Sync files and directories to/from your Filen drive.",
+@@ -137,7 +152,10 @@ class SyncInterface {
+ 					dbPath: pathModule.join(this.app.dataDir, "sync"),
+ 					sdk: this.filen,
+ 					onMessage: msg => {
+-						this.app.outVerbose(JSON.stringify(msg, null, 2))
++						// These diagnostics can contain hundreds of thousands of ignored paths. Menubar
++						// does not consume them, so avoid creating and piping a multi-megabyte JSON string.
++						// Keep processing the callback below in case handling is added independently.
++						outputVerboseSyncMessage(this.app, msg)
+ 
+ 						// update progress
+ 						if (progressBar !== null && msg.type === "transfer") {
+@@ -356,4 +374,4 @@ class SyncInterface {
+ 
+ function getUuidBasedOnString(str: string): string {
+ 	return uuidModule(str, "00000000-0000-0000-0000-000000000000")
+-}
+\ No newline at end of file
++}
+diff --git a/src/framework/app.test.ts b/src/framework/app.test.ts
+index 528d933..f504392 100644
+--- a/src/framework/app.test.ts
++++ b/src/framework/app.test.ts
+@@ -1,5 +1,6 @@
+ import { describe, test, expect } from "bun:test"
+ import { splitCommandSegments } from "./app"
++import { mockFrameworkApp } from "../test/tests"
+ 
+ describe("splitCommandSegments()", () => {
+ 
+@@ -16,3 +17,15 @@ describe("splitCommandSegments()", () => {
+ 	})
+ 
+ })
++
++describe("logging", () => {
++	test("does not retain output when no log file is configured", async () => {
++		const { app } = mockFrameworkApp(() => [])
++		app.out("continuous sync event")
++
++		// writeLog normally enters its mutex asynchronously.
++		await new Promise(resolve => setTimeout(resolve, 0))
++
++		expect((app as unknown as { logs: string }).logs).toBe("")
++	})
++})
+diff --git a/src/test/keyringMock.ts b/src/test/keyringMock.ts
+new file mode 100644
+index 0000000..8f38573
+--- /dev/null
++++ b/src/test/keyringMock.ts
+@@ -0,0 +1,7 @@
++import { mock } from "bun:test"
++
++mock.module("@jupiterpi/node-keyring", () => ({
++	deletePassword: () => undefined,
++	getPassword: () => null,
++	setPassword: () => undefined,
++}))
+diff --git a/src/app/featureInterfaces/syncInterface.test.ts b/src/app/featureInterfaces/syncInterface.test.ts
+new file mode 100644
+index 0000000..ac45711
+--- /dev/null
++++ b/src/app/featureInterfaces/syncInterface.test.ts
+@@ -0,0 +1,80 @@
++import { describe, expect, test } from "bun:test"
++import { mkdtemp, readFile, rm } from "node:fs/promises"
++import { tmpdir } from "node:os"
++import { join } from "node:path"
++import { SyncMessage, SyncPair } from "@filen/sync/dist/types"
++import { buildF, EmptyX } from "../../framework/features"
++import { mockInterfaceAdapter } from "../../test/tests"
++import { outputVerboseSyncMessage, shouldOutputVerboseSyncMessage } from "./syncInterface"
++
++const syncPair = {
++	name: "test",
++	uuid: "00000000-0000-0000-0000-000000000001",
++	localPath: "/tmp/test",
++	remotePath: "/",
++	remoteParentUUID: "00000000-0000-0000-0000-000000000002",
++	mode: "twoWay",
++	paused: false,
++	excludeDotFiles: false,
++	localTrashDisabled: false,
++} satisfies SyncPair
++
++describe("shouldOutputVerboseSyncMessage()", () => {
++	test("omits ignored-tree payloads but outputs ordinary events without file logging", () => {
++		const output: string[] = []
++		const app = {
++			isFileLoggingEnabled: false,
++			outVerbose: (message: string) => output.push(message),
++		}
++
++		outputVerboseSyncMessage(app, { type: "localTreeIgnored", syncPair, data: { ignored: [] } })
++		outputVerboseSyncMessage(app, { type: "remoteTreeIgnored", syncPair, data: { ignored: [] } })
++		outputVerboseSyncMessage(app, { type: "cycleSuccess", syncPair })
++
++		expect(output).toHaveLength(1)
++		expect(output[0]).toContain("\"type\": \"cycleSuccess\"")
++		expect(shouldOutputVerboseSyncMessage({ type: "localTreeIgnored" }, true)).toBe(true)
++		expect(shouldOutputVerboseSyncMessage({ type: "remoteTreeIgnored" }, true)).toBe(true)
++	})
++
++	test("explicit log file captures ordinary and ignored diagnostics", async () => {
++		const directory = await mkdtemp(join(tmpdir(), "filen-cli-log-test-"))
++		const logFile = join(directory, "filen.log")
++
++		try {
++			const f = buildF<EmptyX>()
++			const { adapter, output } = mockInterfaceAdapter({ input: [] })
++			const emitDiagnostics = f.feature({
++				cmd: ["emit-diagnostics"],
++				description: null,
++				invoke: async ({ app }) => {
++					const messages: SyncMessage[] = [
++						{ type: "cycleSuccess", syncPair },
++						{ type: "localTreeIgnored", syncPair, data: { ignored: [] } },
++						{ type: "remoteTreeIgnored", syncPair, data: { ignored: [] } },
++					]
++
++					for (const message of messages) outputVerboseSyncMessage(app, message)
++					await new Promise(resolve => setTimeout(resolve, 0))
++				},
++			})
++			const app = f.app({
++				info: { name: "Test", version: "0.0.0" },
++				argv: ["--log-file", logFile, "emit-diagnostics"],
++				adapter,
++				features: [emitDiagnostics],
++				defaultCtx: {},
++				mainFeature: { cmd: [], description: null, arguments: [], invoke: async () => {} },
++			}).app()
++
++			expect(await app.main()).toBe(true)
++			expect(output()).toBe("")
++			const log = await readFile(logFile, "utf8")
++			expect(log).toContain("\"type\": \"cycleSuccess\"")
++			expect(log).toContain("\"type\": \"localTreeIgnored\"")
++			expect(log).toContain("\"type\": \"remoteTreeIgnored\"")
++		} finally {
++			await rm(directory, { recursive: true, force: true })
++		}
++	})
++})
+diff --git a/src/framework/app.ts b/src/framework/app.ts
+index 41ed0c6..0b9216c 100644
+--- a/src/framework/app.ts
++++ b/src/framework/app.ts
+@@ -145,10 +145,16 @@ export class App<X extends Extra> {
+ 	// logs
+ 
+ 	private allLogsWrittenToDisk = true
++	private logFileConfigured = false
+ 	private writeLogsToDisk: () => void = () => {}
+ 
++	public get isFileLoggingEnabled() {
++		return this.logFileConfigured
++	}
++
+ 	private setupLogs(logsFile: string | undefined = undefined) {
+ 		if (logsFile === undefined) return
++		this.logFileConfigured = true
+ 		this.writeLogsToDisk = () => {
+ 			if (this.allLogsWrittenToDisk) return
+ 			this.allLogsWrittenToDisk = true
+@@ -170,6 +176,10 @@ export class App<X extends Extra> {
+ 	private logs = ""
+ 	private logsMutex = new Mutex()
+ 	private writeLog(message: string, type: "log" | "input" | "error") {
++		// Without --log-file this buffer has no reader and is never persisted. Keeping every
++		// continuous-sync event here would retain an unbounded string for the process lifetime.
++		if (!this.logFileConfigured) return
++
+ 		this.logsMutex.acquire().then(() => {
+ 			this.allLogsWrittenToDisk = false
+ 			this.logs += message.split("\n").map(line => `${formatTimestamp(new Date().getTime())} ${type === "log" ? "[LOG]" : type === "error" ? "[ERR]" : "[IN ]"} ${line}\n`).join("")

@@ -1,0 +1,12 @@
+diff --git a/dist/lib/state.js b/dist/lib/state.js
+--- a/dist/lib/state.js
++++ b/dist/lib/state.js
+@@ -16,7 +16,7 @@
+ const readline_1 = __importDefault(require("readline"));
+ const uuid_1 = require("uuid");
+ const fast_glob_1 = __importDefault(require("fast-glob"));
+-const STATE_VERSION = 2;
++const STATE_VERSION = 3;
+ /**
+  * State
+  * @date 3/1/2024 - 11:11:32 PM

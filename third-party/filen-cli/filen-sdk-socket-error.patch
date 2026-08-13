@@ -1,0 +1,14 @@
+diff --git a/src/fs/index.ts b/src/fs/index.ts
+--- a/src/fs/index.ts
++++ b/src/fs/index.ts
+@@ -123,6 +123,10 @@
+ 				}
+ 			}
+ 		}
++
++		// Node reserves the `error` event for fatal unhandled errors. FS owns this
++		// private socket and relies on its reconnect path for transient failures.
++		this.socket.on("error", () => {})
+ 
+ 		this._initSocketEvents(params.connectToSocket).catch(() => {})
+ 	}

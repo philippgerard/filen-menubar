@@ -35,8 +35,12 @@ dist-ssr
 
 # Tauri build artifacts
 src-tauri/target/
+src-tauri/generated/filen-cli
+src-tauri/generated/filen-cli-node
+src-tauri/generated/filen-cli.stamp
+src-tauri/generated/compliance/
+src-tauri/generated/licenses/
 
 # macOS
 .DS_Store
 *.dmg
-

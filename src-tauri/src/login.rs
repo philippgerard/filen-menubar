@@ -5,7 +5,7 @@
 //! stdin, and reports structured states to the temporary login window. Secrets
 //! are never placed in command arguments, environment variables, or logs.
 
-use crate::cli::{find_filen_cli, FilenCliInfo};
+use crate::cli::FilenCliRuntime;
 use crate::tray::TrayAction;
 use portable_pty::{Child, ChildKiller, CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
@@ -98,12 +98,14 @@ impl LoginSession {
 
 /// Owns the single interactive login process allowed at a time.
 pub struct LoginManager {
+    runtime: FilenCliRuntime,
     current: Mutex<Option<Arc<LoginSession>>>,
 }
 
 impl LoginManager {
-    pub fn new() -> Self {
+    pub fn new(runtime: FilenCliRuntime) -> Self {
         Self {
+            runtime,
             current: Mutex::new(None),
         }
     }
@@ -123,13 +125,7 @@ impl LoginManager {
             }
         }
 
-        let cli_info = match tokio::task::spawn_blocking(find_filen_cli).await {
-            Ok(cli_info) => cli_info,
-            Err(error) => {
-                log::error!("Failed to discover Filen CLI for login: {error}");
-                return LoginOutcome::Failed;
-            }
-        };
+        let runtime = self.runtime.clone();
 
         let (input_tx, input_rx) = std_mpsc::channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -155,7 +151,7 @@ impl LoginManager {
             .name("filen-login".to_string())
             .spawn(move || {
                 run_login_process(
-                    cli_info, email, password, input_rx, event_tx, cancelled, killer,
+                    runtime, email, password, input_rx, event_tx, cancelled, killer,
                 );
             });
 
@@ -234,12 +230,6 @@ impl LoginManager {
         {
             *current = None;
         }
-    }
-}
-
-impl Default for LoginManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -546,7 +536,7 @@ impl LoginPromptDriver {
 }
 
 fn run_login_process(
-    cli_info: FilenCliInfo,
+    runtime: FilenCliRuntime,
     email: Zeroizing<String>,
     password: Zeroizing<String>,
     input_rx: std_mpsc::Receiver<LoginInput>,
@@ -569,13 +559,12 @@ fn run_login_process(
         }
     };
 
-    let mut command = CommandBuilder::new(&cli_info.command);
-    command.arg("--skip-update");
+    let mut command = CommandBuilder::new(runtime.command());
+    for argument in runtime.common_args() {
+        command.arg(argument);
+    }
     command.env("NO_COLOR", "1");
     command.env("TERM", "xterm-256color");
-    if let Some(path_env) = cli_info.path_env {
-        command.env("PATH", path_env);
-    }
 
     let child = match pair.slave.spawn_command(command) {
         Ok(child) => child,
@@ -775,6 +764,15 @@ fn stop_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn test_runtime() -> FilenCliRuntime {
+        FilenCliRuntime::new(
+            PathBuf::from("/missing/node"),
+            PathBuf::from("/missing/filen-cli.cjs"),
+            PathBuf::from("/tmp/filen-cli-test"),
+        )
+    }
 
     fn driver() -> LoginPromptDriver {
         LoginPromptDriver::new(
@@ -789,18 +787,18 @@ mod tests {
     }
 
     #[test]
-    fn login_copy_explains_the_manual_cli_alternative() {
+    fn login_copy_explains_the_bundled_sign_in() {
         let copy = login_copy();
 
         assert!(!copy.alternative_title.is_empty());
-        assert!(copy.alternative_note.contains("filen"));
-        assert!(copy.alternative_note.contains("filen-cli"));
-        assert!(copy.alternative_note.contains('y'));
+        assert!(copy.alternative_note.contains("Filen CLI"));
+        assert!(copy.alternative_note.contains("bundled"));
+        assert!(copy.alternative_note.contains("terminal"));
     }
 
     #[test]
     fn login_window_close_prevents_exactly_one_implicit_exit() {
-        let manager = Arc::new(LoginManager::new());
+        let manager = Arc::new(LoginManager::new(test_runtime()));
         let (action_tx, _action_rx) = mpsc::unbounded_channel();
         let context = LoginCommandContext::new(manager, action_tx);
 
@@ -813,7 +811,7 @@ mod tests {
 
     #[test]
     fn explicit_exit_is_not_prevented_after_login_window_close() {
-        let manager = Arc::new(LoginManager::new());
+        let manager = Arc::new(LoginManager::new(test_runtime()));
         let (action_tx, _action_rx) = mpsc::unbounded_channel();
         let context = LoginCommandContext::new(manager, action_tx);
 
@@ -913,7 +911,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn fake_cli(script: &str) -> (tempfile::TempDir, FilenCliInfo) {
+    fn fake_cli(script: &str) -> (tempfile::TempDir, FilenCliRuntime) {
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = tempfile::tempdir().expect("create fake CLI directory");
@@ -922,18 +920,14 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
             .expect("make fake CLI executable");
 
-        (
-            temp_dir,
-            FilenCliInfo {
-                command: path.to_string_lossy().to_string(),
-                path_env: None,
-            },
-        )
+        let data_dir = temp_dir.path().join("CLI data with spaces");
+        let entrypoint = temp_dir.path().join("filen-cli.cjs");
+        (temp_dir, FilenCliRuntime::new(path, entrypoint, data_dir))
     }
 
     #[cfg(unix)]
     fn run_fake_cli(
-        cli_info: FilenCliInfo,
+        runtime: FilenCliRuntime,
     ) -> (
         std_mpsc::Sender<LoginInput>,
         mpsc::UnboundedReceiver<LoginOutcome>,
@@ -943,7 +937,7 @@ mod tests {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let handle = std::thread::spawn(move || {
             run_login_process(
-                cli_info,
+                runtime,
                 Zeroizing::new("person@example.com".to_string()),
                 Zeroizing::new("secret".to_string()),
                 input_rx,
@@ -958,8 +952,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_runner_completes_legacy_login_without_exposing_secrets_as_arguments() {
-        let (_temp_dir, cli_info) = fake_cli(
+        let (_temp_dir, runtime) = fake_cli(
             r#"#!/bin/sh
+[ "$1" = "--disable-warning=DEP0169" ] || exit 41
+[ "$2" = "${0%/*}/filen-cli.cjs" ] || exit 42
+[ "$3" = "--skip-update" ] || exit 43
+[ "$4" = "--data-dir" ] || exit 44
+[ -n "$5" ] || exit 45
 printf 'Please enter your Filen credentials:\nEmail: '
 IFS= read -r email
 printf 'Password: '
@@ -977,7 +976,7 @@ printf 'You can delete these credentials using `filen logout`\n'
 IFS= read -r command
 "#,
         );
-        let (_input_tx, mut event_rx, handle) = run_fake_cli(cli_info);
+        let (_input_tx, mut event_rx, handle) = run_fake_cli(runtime);
 
         assert_eq!(
             event_rx.blocking_recv(),

@@ -1,0 +1,32 @@
+{
+  "napi@3.12.1": {
+    "file": "license-supplements/napi-rs-LICENSE.txt",
+    "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+    "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/956e4525fea6a676ea3680b711382f167b899af9/LICENSE"
+  },
+  "napi-build@2.4.1": {
+    "file": "license-supplements/napi-rs-LICENSE.txt",
+    "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+    "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/956e4525fea6a676ea3680b711382f167b899af9/LICENSE"
+  },
+  "napi-derive@3.6.3": {
+    "file": "license-supplements/napi-rs-LICENSE.txt",
+    "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+    "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/956e4525fea6a676ea3680b711382f167b899af9/LICENSE"
+  },
+  "napi-derive-backend@6.1.2": {
+    "file": "license-supplements/napi-rs-LICENSE.txt",
+    "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+    "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/956e4525fea6a676ea3680b711382f167b899af9/LICENSE"
+  },
+  "napi-sys@3.3.0": {
+    "file": "license-supplements/napi-rs-LICENSE.txt",
+    "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+    "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/679eb79f5cf3c7c6b2850f4ab46092126f23dc5c/LICENSE"
+  },
+  "r-efi@6.0.0": {
+    "file": "license-supplements/r-efi-AUTHORS.txt",
+    "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111",
+    "source": "https://raw.githubusercontent.com/r-efi/r-efi/7e1b0322d31d625f81a5656096330934f9cd835d/AUTHORS"
+  }
+}
