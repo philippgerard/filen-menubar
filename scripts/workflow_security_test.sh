@@ -49,6 +49,12 @@ if [[ "$(grep -Fc 'name="${name// /.}"' "$build_workflow")" -ne 1 ]] ||
     exit 1
 fi
 grep -Fq 'name: Verify draft release assets' "$build_workflow"
+grep -Fq 'gh api --paginate --slurp' "$build_workflow"
+grep -Fq 'expected exactly one matching draft release' "$build_workflow"
+if grep -Fq 'releases/tags/${RELEASE_TAG}' "$build_workflow"; then
+    echo "draft verification must not use the release-by-tag endpoint" >&2
+    exit 1
+fi
 grep -Fq 'draft release asset names differ from the checksummed files' "$build_workflow"
 # shellcheck disable=SC2016
 grep -Fq 'draft release asset digest mismatch: $name' "$build_workflow"
