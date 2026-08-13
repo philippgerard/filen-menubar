@@ -24,6 +24,20 @@ fi
 [[ -f "${valid_out}/filen-menubar-bin-0.1.30.deb" ]]
 [[ -f "${valid_out}/LICENSE-0.1.30" ]]
 bash -n "${valid_out}/PKGBUILD"
+grep -Fq "license=('MIT' 'AGPL-3.0-only')" "${valid_out}/PKGBUILD"
+grep -Fq 'local _runtime="${pkgdir}/usr/lib/Filen Menubar/filen-cli/node"' \
+    "${valid_out}/PKGBUILD"
+grep -Fq 'local _entrypoint="${pkgdir}/usr/lib/Filen Menubar/filen-cli/filen-cli.cjs"' \
+    "${valid_out}/PKGBUILD"
+grep -Fq 'node_modules/@jupiterpi/node-keyring' "${valid_out}/PKGBUILD"
+if grep -Eq 'filen-cli-bin|nodejs' "${valid_out}/PKGBUILD"; then
+    echo "rendered package still depends on an external Filen CLI runtime" >&2
+    exit 1
+fi
+if grep -Eq '^optdepends=' "${valid_out}/PKGBUILD"; then
+    echo "rendered package still advertises an optional external runtime" >&2
+    exit 1
+fi
 
 assert_rejected() {
     local label="$1"

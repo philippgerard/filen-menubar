@@ -1,0 +1,12 @@
+diff --git a/src/lib/state.ts b/src/lib/state.ts
+--- a/src/lib/state.ts
++++ b/src/lib/state.ts
+@@ -8,7 +8,7 @@ import readline from "readline"
+ import { v4 as uuidv4 } from "uuid"
+ import FastGlob from "fast-glob"
+ 
+-const STATE_VERSION = 2
++const STATE_VERSION = 3
+ 
+ /**
+  * State

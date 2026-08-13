@@ -14,6 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 INSTALL_DIR="/usr/local/bin"
+RESOURCE_INSTALL_DIR="/usr/local/lib/Filen Menubar"
 DESKTOP_FILE="$HOME/.local/share/applications/filen-menubar.desktop"
 AUTOSTART_FILE="$HOME/.config/autostart/filen-menubar.desktop"
 ICON_DIR="$HOME/.local/share/icons/hicolor"
@@ -32,6 +33,22 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}✗${NC} $1"
+}
+
+# Remove only the installer-owned native module tree at its fixed path.
+remove_installed_cli_modules() {
+    local modules_dir="$RESOURCE_INSTALL_DIR/filen-cli/node_modules"
+    case "$modules_dir" in
+        "/usr/local/lib/Filen Menubar/filen-cli/node_modules") ;;
+        *)
+            print_error "Refusing to remove unexpected resource path: $modules_dir"
+            exit 1
+            ;;
+    esac
+
+    if [ -d "$modules_dir" ]; then
+        sudo rm -rf -- "$modules_dir"
+    fi
 }
 
 # Detect package manager and distro
@@ -55,13 +72,9 @@ install_dependencies() {
     case "$DISTRO" in
         arch|cachyos|manjaro|endeavouros|garuda)
             print_step "Detected Arch-based distro: $DISTRO"
-            if ! pacman -Q webkit2gtk-4.1 &>/dev/null; then
-                print_warning "Installing build dependencies (requires sudo)..."
-                sudo pacman -S --needed webkit2gtk-4.1 libappindicator-gtk3 librsvg \
-                    base-devel curl wget file openssl libxdo nodejs npm rust
-            else
-                print_success "Dependencies already installed"
-            fi
+            print_warning "Installing missing build dependencies (requires sudo)..."
+            sudo pacman -S --needed webkit2gtk-4.1 libappindicator-gtk3 librsvg \
+                base-devel curl wget file openssl libxdo nodejs npm rust
             ;;
         fedora|rhel|centos)
             print_step "Detected Fedora/RHEL-based distro: $DISTRO"
@@ -102,25 +115,6 @@ install_dependencies() {
     esac
 }
 
-# Check for Filen CLI
-check_filen_cli() {
-    print_step "Checking for Filen CLI..."
-
-    if command -v filen &>/dev/null; then
-        FILEN_VERSION=$(filen --version 2>/dev/null || echo "unknown")
-        print_success "Filen CLI found: $FILEN_VERSION"
-    else
-        print_warning "Filen CLI not found. Installing..."
-        npm install -g @filen/cli
-        print_success "Filen CLI installed"
-        echo ""
-        print_warning "IMPORTANT: You need to login to Filen CLI before using the menubar app:"
-        echo "    filen"
-        echo "    (This opens an interactive session where you can login)"
-        echo ""
-    fi
-}
-
 # Build the application
 build_app() {
     print_step "Building Filen Menubar..."
@@ -131,9 +125,25 @@ build_app() {
 
     cd "$PROJECT_ROOT"
 
+    local node_major=""
+    if command -v node &>/dev/null; then
+        node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+    fi
+    if [[ ! "$node_major" =~ ^[0-9]+$ ]] || ((node_major < 20)); then
+        print_error "Node.js 20 or newer is required to build Filen Menubar."
+        print_warning "This is a build dependency only; installed app bundles its own runtime."
+        exit 1
+    fi
+
+    if ! command -v bun &>/dev/null || [ "$(bun --version)" != "1.3.14" ]; then
+        print_error "Bun 1.3.14 is required to build the bundled Filen CLI."
+        print_warning "Install that exact version from https://bun.sh before continuing."
+        exit 1
+    fi
+
     # Install npm dependencies
     print_step "Installing npm dependencies..."
-    npm install
+    npm ci
 
     # Install Tauri CLI if not present
     if ! command -v cargo-tauri &>/dev/null; then
@@ -177,7 +187,7 @@ check_shadowing() {
         print_warning "FORCE_INSTALL set, continuing over the '$owner' package."
     else
         print_warning "On Arch the packaged install is usually the better fit:"
-        echo "    paru -S filen-menubar-bin filen-cli-bin"
+        echo "    paru -S filen-menubar-bin"
         echo ""
     fi
 }
@@ -193,7 +203,27 @@ install_binary() {
     BINARY_PATH="$PROJECT_ROOT/src-tauri/target/release/filen-menubar"
 
     sudo install -Dm755 "$BINARY_PATH" "$INSTALL_DIR/filen-menubar"
+    sudo install -Dm755 "$PROJECT_ROOT/src-tauri/generated/filen-cli-node" \
+        "$RESOURCE_INSTALL_DIR/filen-cli/node"
+    sudo install -Dm644 "$PROJECT_ROOT/src-tauri/generated/filen-cli/filen-cli.cjs" \
+        "$RESOURCE_INSTALL_DIR/filen-cli/filen-cli.cjs"
+    remove_installed_cli_modules
+    sudo cp -R "$PROJECT_ROOT/src-tauri/generated/filen-cli/node_modules" \
+        "$RESOURCE_INSTALL_DIR/filen-cli/node_modules"
+    sudo install -Dm644 "$PROJECT_ROOT/LICENSE" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-menubar/MIT.txt"
+    sudo install -Dm644 "$PROJECT_ROOT/third-party/filen-cli/AGPL-3.0.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/AGPL-3.0.txt"
+    sudo install -Dm644 "$PROJECT_ROOT/third-party/filen-cli/README.md" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/README.md"
+    sudo install -Dm644 "$PROJECT_ROOT/src-tauri/generated/licenses/filen-cli/NODE-LICENSE.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/NODE-LICENSE.txt"
+    sudo install -Dm644 "$PROJECT_ROOT/src-tauri/generated/licenses/filen-cli/THIRD_PARTY_NOTICES.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/THIRD_PARTY_NOTICES.txt"
+    sudo install -Dm644 "$PROJECT_ROOT/src-tauri/generated/licenses/filen-cli/runtime.cdx.json" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/runtime.cdx.json"
     print_success "Binary installed to $INSTALL_DIR/filen-menubar"
+    print_success "Bundled sync backend installed to $RESOURCE_INSTALL_DIR/filen-cli"
 }
 
 # Install icons
@@ -283,6 +313,22 @@ uninstall() {
         print_success "Removed binary"
     fi
 
+    for resource in \
+        "$RESOURCE_INSTALL_DIR/filen-cli/node" \
+        "$RESOURCE_INSTALL_DIR/filen-cli/filen-cli.cjs" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-menubar/MIT.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/AGPL-3.0.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/README.md" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/NODE-LICENSE.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/THIRD_PARTY_NOTICES.txt" \
+        "$RESOURCE_INSTALL_DIR/licenses/filen-cli/runtime.cdx.json"; do
+        if [ -f "$resource" ]; then
+            sudo rm -f "$resource"
+        fi
+    done
+
+    remove_installed_cli_modules
+
     # Remove desktop entry
     if [ -f "$DESKTOP_FILE" ]; then
         rm -f "$DESKTOP_FILE"
@@ -338,7 +384,6 @@ main() {
     case "${1:-install}" in
         install)
             install_dependencies
-            check_filen_cli
             build_app
             install_binary
             install_icons
@@ -352,9 +397,7 @@ main() {
             echo "  • Find 'Filen Menubar' in your application menu"
             echo "  • It will start automatically on login"
             echo ""
-            if ! filen whoami &>/dev/null 2>&1; then
-                print_warning "Don't forget to login by running: filen"
-            fi
+            print_warning "Open the tray menu and choose Login to create a Filen session."
             ;;
         build)
             install_dependencies
@@ -380,7 +423,6 @@ main() {
             ;;
         deps)
             install_dependencies
-            check_filen_cli
             print_success "Dependencies installed!"
             ;;
         -h|--help|help)

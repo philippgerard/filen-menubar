@@ -63,7 +63,7 @@ pub enum CliError {
     Spawn(std::io::Error),
 
     #[allow(dead_code)]
-    #[error("CLI not found. Please install filen-cli")]
+    #[error("Bundled Filen CLI is missing or incompatible")]
     NotFound,
 
     #[allow(dead_code)]
@@ -104,7 +104,10 @@ mod tests {
     #[test]
     fn test_cli_error_display() {
         let err = CliError::NotFound;
-        assert_eq!(err.to_string(), "CLI not found. Please install filen-cli");
+        assert_eq!(
+            err.to_string(),
+            "Bundled Filen CLI is missing or incompatible"
+        );
     }
 
     #[test]

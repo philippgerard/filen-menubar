@@ -26,8 +26,23 @@ if [[ "$build_guard" != "    if: github.ref == 'refs/heads/main'" ]]; then
     exit 1
 fi
 
+release_guard="$(
+    awk '/^  release:$/ {
+        while (getline) {
+            if ($0 ~ /^    if:/) {
+                print
+                exit
+            }
+        }
+    }' "$build_workflow"
+)"
+if [[ "$release_guard" != "    if: github.ref == 'refs/heads/main'" ]]; then
+    echo "public release must be guarded to the reviewed main commit" >&2
+    exit 1
+fi
+
 notarize_guard="$(
-    awk '/^      - name: Notarize and verify macOS release disk image$/ {
+    awk '/^      - name: Verify and notarize macOS release$/ {
         getline
         print
         exit
@@ -49,6 +64,8 @@ grep -Fq 'version="$(bash packaging/arch/validate-version.sh "$INPUT_VERSION")"'
 # shellcheck disable=SC2016
 grep -Fq 'git merge-base --is-ancestor "$commit" "$GITHUB_SHA"' "$build_workflow"
 # shellcheck disable=SC2016
+grep -Fq 'bash scripts/check-version-sync.sh "$version" "$commit"' "$build_workflow"
+# shellcheck disable=SC2016
 if [[ "$(grep -Fc 'ref: ${{ needs.prepare.outputs.commit }}' "$build_workflow")" -ne 2 ]]; then
     echo "release build and packaging jobs must check out the validated commit" >&2
     exit 1
@@ -63,12 +80,69 @@ if [[ "$(grep -Fc 'run: npm run check' "$build_workflow")" -ne 1 ]] ||
     exit 1
 fi
 
+grep -Fq 'name: Verify macOS bundle payload' "$checks_workflow"
+grep -Fq 'name: Verify Linux package payloads and ABI floor' "$checks_workflow"
+# shellcheck disable=SC2016
+grep -Fq 'codesign -d --entitlements :- "$helper_path"' "$checks_workflow"
+# shellcheck disable=SC1003
+if [[ "$(grep -Foc -- '--identifier io.filen.menubar.filen-cli \' "$build_workflow")" -ne 1 ]]; then
+    echo "release signing must assign the helper's stable code-signing identifier" >&2
+    exit 1
+fi
+grep -Fq -- '--identifier io.filen.menubar.filen-cli.keyring' "$build_workflow"
+grep -Fq 'Contents/Helpers/filen-menubar-cli' "$build_workflow"
+grep -Fq 'Contents/Helpers/filen-menubar-cli' "$checks_workflow"
+grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$build_workflow"
+grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$checks_workflow"
+
+for workflow in "$build_workflow" "$checks_workflow"; do
+    grep -Fq 'name: Package and smoke-rebuild corresponding source' "$workflow"
+    grep -Fq 'scripts/package-filen-cli-source.sh' "$workflow"
+    grep -Fq 'rebuild-source.sh' "$workflow"
+    grep -Fq 'node-version: 24.18.1' "$workflow"
+    grep -Fq 'libdbus-1-dev' "$workflow"
+    grep -Fq 'pkg-config' "$workflow"
+done
+
+if grep -R -Eq 'BUN-LICENSE|LGPL-2\.0|externalBin|src-tauri/binaries/filen-menubar-cli' \
+    "$build_workflow" "$checks_workflow"; then
+    echo "workflows still reference the retired Bun/externalBin payload" >&2
+    exit 1
+fi
+
+for forbidden in \
+    com.apple.security.cs.allow-unsigned-executable-memory \
+    com.apple.security.cs.disable-executable-page-protection \
+    com.apple.security.cs.disable-library-validation; do
+    grep -Fq "$forbidden" "$build_workflow"
+done
+# shellcheck disable=SC2016
+grep -Fq -- '--entitlements src-tauri/filen-cli.entitlements "$helper"' "$build_workflow"
+grep -Fq 'com.apple.security.cs.allow-jit' "${repo_root}/src-tauri/filen-cli.entitlements"
+if [[ "$(plutil -convert json -o - "${repo_root}/src-tauri/filen-cli.entitlements" | \
+    python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')" != \
+    'com.apple.security.cs.allow-jit' ]]; then
+    echo "release helper entitlement file must contain only allow-jit" >&2
+    exit 1
+fi
+if grep -Eq -- '--jit[l]ess' "$build_workflow" "$checks_workflow"; then
+    echo "Node jitless mode disables WebAssembly required by the bundled HTTP/WebSocket client" >&2
+    exit 1
+fi
+
 if grep -R -Fq 'awalsh128/cache-apt-pkgs-action' "${repo_root}/.github/workflows"; then
     echo "Linux dependencies must fail fast instead of using the lossy APT cache action" >&2
     exit 1
 fi
 
 for workflow in "$build_workflow" "$checks_workflow"; do
+    if [[ "$(grep -Fc 'bun-version: 1.3.14' "$workflow")" -ne 1 ]] ||
+        [[ "$(grep -Fc 'run: npm ci' "$workflow")" -ne 1 ]] ||
+        [[ "$(grep -Fc 'bun --revision' "$workflow")" -ne 1 ]]; then
+        echo "workflows must use the pinned Bun helper toolchain and deterministic npm install" >&2
+        exit 1
+    fi
+
     if [[ "$(grep -Fc 'sudo apt-get -o Acquire::Retries=3 update' "$workflow")" -ne 1 ]] ||
         [[ "$(grep -Fc 'sudo apt-get -o Acquire::Retries=3 install -y' "$workflow")" -ne 1 ]]; then
         echo "Linux workflows must refresh package lists and install dependencies explicitly" >&2
@@ -148,6 +222,7 @@ assert_action_pinned() {
 
 assert_action_pinned dtolnay/rust-toolchain
 assert_action_pinned swatinem/rust-cache
+assert_action_pinned oven-sh/setup-bun
 assert_action_pinned softprops/action-gh-release
 assert_action_pinned KSXGitHub/github-actions-deploy-aur
 

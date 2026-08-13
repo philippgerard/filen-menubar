@@ -22,7 +22,7 @@ pub enum SyncState {
     Paused,
     /// Error occurred during sync
     Error,
-    /// Filen CLI not found/not installed
+    /// Bundled sync backend is missing or incompatible
     CliNotFound,
     /// No internet connection
     Offline,

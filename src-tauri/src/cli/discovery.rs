@@ -1,201 +1,93 @@
-//! CLI binary discovery
+//! Runtime description for the Filen CLI bundled with the application.
 //!
-//! This module handles finding the Filen CLI binary on the system.
-//! GUI apps launched from Finder/desktop don't inherit shell PATH,
-//! so we need to search common installation locations.
+//! The backend is an app-private resource, not a command discovered on PATH.
+//! Keeping one immutable runtime description ensures version checks, login,
+//! session detection, and syncing all address the same executable and data
+//! directory.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
-/// Information about the filen CLI location
-#[derive(Debug, Clone)]
-pub struct FilenCliInfo {
-    /// Path to the filen binary
-    pub command: String,
-    /// PATH environment variable to use (includes node binary directory)
-    pub path_env: Option<String>,
+const BUNDLED_CLI_VERSION_MANIFEST: &str = include_str!("../../../third-party/filen-cli/VERSION");
+
+pub fn bundled_cli_version() -> &'static str {
+    BUNDLED_CLI_VERSION_MANIFEST.trim()
 }
 
-/// Find the filen CLI binary by searching common installation paths.
-///
-/// This is necessary because GUI apps launched from Finder don't inherit shell PATH.
-/// Returns both the filen path and the PATH env needed to run it (for node-based installs).
-pub fn find_filen_cli() -> FilenCliInfo {
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
-            log::warn!("Could not determine home directory");
-            return FilenCliInfo {
-                command: "filen".to_string(),
-                path_env: None,
-            };
-        }
-    };
+pub fn bundled_cli_version_output() -> String {
+    format!("Filen CLI {}", bundled_cli_version())
+}
 
-    // Common installation paths to search (with their bin directories for PATH)
-    let search_paths: Vec<(PathBuf, Option<PathBuf>)> = vec![
-        // Standard system paths - node should be in system PATH
-        (
-            PathBuf::from("/usr/local/bin/filen"),
-            Some(PathBuf::from("/usr/local/bin")),
-        ),
-        (
-            PathBuf::from("/opt/homebrew/bin/filen"),
-            Some(PathBuf::from("/opt/homebrew/bin")),
-        ),
-        // Distro packages. The Arch AUR package filen-cli-bin ships the
-        // standalone release binary as "filen-cli", not "filen".
-        (
-            PathBuf::from("/usr/bin/filen-cli"),
-            Some(PathBuf::from("/usr/bin")),
-        ),
-        (
-            PathBuf::from("/usr/bin/filen"),
-            Some(PathBuf::from("/usr/bin")),
-        ),
-        // Official Filen CLI installer path (curl -sL https://filen.io/cli.sh | bash)
-        (
-            home.join(".filen-cli/bin/filen"),
-            Some(home.join(".filen-cli/bin")),
-        ),
-        // User local bin
-        (home.join(".local/bin/filen"), Some(home.join(".local/bin"))),
-        // npm global installs
-        (home.join(".npm/bin/filen"), Some(home.join(".npm/bin"))),
-        (
-            home.join(".npm-global/bin/filen"),
-            Some(home.join(".npm-global/bin")),
-        ),
-    ];
+/// The exact Node executable, CLI entrypoint, and writable data directory used
+/// by the bundled backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilenCliRuntime {
+    command: PathBuf,
+    entrypoint: PathBuf,
+    data_dir: PathBuf,
+}
 
-    // Check standard paths first
-    for (filen_path, bin_dir) in &search_paths {
-        if filen_path.exists() {
-            log::info!("Found filen CLI at: {:?}", filen_path);
-            let path_env = bin_dir.as_ref().map(|d| build_path_env(d));
-            return FilenCliInfo {
-                command: filen_path.to_string_lossy().to_string(),
-                path_env,
-            };
+impl FilenCliRuntime {
+    pub fn new(command: PathBuf, entrypoint: PathBuf, data_dir: PathBuf) -> Self {
+        Self {
+            command,
+            entrypoint,
+            data_dir,
         }
     }
 
-    // Search fnm (Fast Node Manager) installations
-    let fnm_base = home.join(".local/share/fnm/node-versions");
-    if fnm_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&fnm_base) {
-            for entry in entries.flatten() {
-                let bin_dir = entry.path().join("installation/bin");
-                let filen_path = bin_dir.join("filen");
-                if filen_path.exists() {
-                    let path_env = build_path_env(&bin_dir);
-                    log::info!("Found filen CLI in fnm at: {:?}", filen_path);
-                    return FilenCliInfo {
-                        command: filen_path.to_string_lossy().to_string(),
-                        path_env: Some(path_env),
-                    };
-                }
-            }
-        }
+    pub fn command(&self) -> &Path {
+        &self.command
     }
 
-    // Search nvm (Node Version Manager) installations
-    let nvm_base = home.join(".nvm/versions/node");
-    if nvm_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
-            for entry in entries.flatten() {
-                let bin_dir = entry.path().join("bin");
-                let filen_path = bin_dir.join("filen");
-                if filen_path.exists() {
-                    log::info!("Found filen CLI in nvm at: {:?}", filen_path);
-                    return FilenCliInfo {
-                        command: filen_path.to_string_lossy().to_string(),
-                        path_env: Some(build_path_env(&bin_dir)),
-                    };
-                }
-            }
-        }
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
-    // Search volta installations
-    let volta_bin = home.join(".volta/bin");
-    let volta_filen = volta_bin.join("filen");
-    if volta_filen.exists() {
-        log::info!("Found filen CLI in volta at: {:?}", volta_filen);
-        return FilenCliInfo {
-            command: volta_filen.to_string_lossy().to_string(),
-            path_env: Some(build_path_env(&volta_bin)),
-        };
+    pub fn entrypoint(&self) -> &Path {
+        &self.entrypoint
     }
 
-    // Fallback to just "filen" (will use PATH if available)
-    log::warn!("filen CLI not found in common paths, falling back to PATH lookup");
-    FilenCliInfo {
-        command: "filen".to_string(),
-        path_env: None,
+    /// Arguments shared by every invocation. The patched backend also has its
+    /// updater disabled at compile time; `--skip-update` is defense in depth.
+    pub fn common_args(&self) -> [OsString; 5] {
+        [
+            OsString::from("--disable-warning=DEP0169"),
+            self.entrypoint.as_os_str().to_owned(),
+            OsString::from("--skip-update"),
+            OsString::from("--data-dir"),
+            self.data_dir.as_os_str().to_owned(),
+        ]
     }
 }
 
-/// Find node binary in common version manager locations
-fn find_node_bin_dir() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Check fnm (Fast Node Manager)
-    let fnm_base = home.join(".local/share/fnm/node-versions");
-    if fnm_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&fnm_base) {
-            for entry in entries.flatten() {
-                let bin_dir = entry.path().join("installation/bin");
-                if bin_dir.join("node").exists() {
-                    log::debug!("Found node in fnm at: {:?}", bin_dir);
-                    return Some(bin_dir);
-                }
-            }
-        }
-    }
+    #[test]
+    fn common_arguments_keep_paths_with_spaces_as_one_argument() {
+        let runtime = FilenCliRuntime::new(
+            PathBuf::from("/Applications/Filen Menubar.app/node"),
+            PathBuf::from("/Applications/Filen Menubar.app/filen-cli.cjs"),
+            PathBuf::from("/tmp/Filen CLI Data"),
+        );
 
-    // Check nvm (Node Version Manager)
-    let nvm_base = home.join(".nvm/versions/node");
-    if nvm_base.exists() {
-        if let Ok(entries) = std::fs::read_dir(&nvm_base) {
-            for entry in entries.flatten() {
-                let bin_dir = entry.path().join("bin");
-                if bin_dir.join("node").exists() {
-                    log::debug!("Found node in nvm at: {:?}", bin_dir);
-                    return Some(bin_dir);
-                }
-            }
-        }
-    }
-
-    // Check volta
-    let volta_bin = home.join(".volta/bin");
-    if volta_bin.join("node").exists() {
-        log::debug!("Found node in volta at: {:?}", volta_bin);
-        return Some(volta_bin);
-    }
-
-    None
-}
-
-/// Build a PATH environment variable that includes the given bin directory
-/// along with essential system paths and node binary location
-fn build_path_env(bin_dir: &std::path::Path) -> String {
-    let system_paths = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-
-    // Check if bin_dir already contains node
-    if bin_dir.join("node").exists() {
-        return format!("{}:{}", bin_dir.display(), system_paths);
-    }
-
-    // Try to find node in version managers
-    if let Some(node_bin_dir) = find_node_bin_dir() {
-        return format!(
-            "{}:{}:{}",
-            bin_dir.display(),
-            node_bin_dir.display(),
-            system_paths
+        assert_eq!(
+            runtime.common_args(),
+            [
+                OsString::from("--disable-warning=DEP0169"),
+                OsString::from("/Applications/Filen Menubar.app/filen-cli.cjs"),
+                OsString::from("--skip-update"),
+                OsString::from("--data-dir"),
+                OsString::from("/tmp/Filen CLI Data"),
+            ]
         );
     }
 
-    format!("{}:{}", bin_dir.display(), system_paths)
+    #[test]
+    fn bundled_version_comes_from_the_checked_in_manifest() {
+        assert_eq!(bundled_cli_version(), "v0.0.39-menubar.2");
+        assert_eq!(bundled_cli_version_output(), "Filen CLI v0.0.39-menubar.2");
+    }
 }

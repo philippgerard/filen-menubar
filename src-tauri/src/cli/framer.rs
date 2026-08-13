@@ -29,6 +29,7 @@ pub struct JsonFramer {
     depth: i32,
     in_string: bool,
     escaped: bool,
+    discarding_text: bool,
     discarding: bool,
     discard_line_start: bool,
     discard_closing_line: bool,
@@ -48,6 +49,16 @@ impl JsonFramer {
         let mut frames = Vec::new();
 
         for ch in chunk.chars() {
+            // A diagnostic without a newline is not allowed to retain memory
+            // forever. Once the top-level text limit is exceeded, discard the
+            // rest of that record and resume framing after its newline.
+            if self.discarding_text {
+                if ch == '\n' {
+                    self.discarding_text = false;
+                }
+                continue;
+            }
+
             // At top level, collect ordinary CLI output until the next newline.
             // A top-level JSON object begins with `{`; tolerate indentation
             // before it without treating the whitespace as a text frame.
@@ -66,6 +77,14 @@ impl JsonFramer {
                     self.buffer.clear();
                 } else if ch != '\r' || !self.buffer.is_empty() {
                     self.buffer.push(ch);
+                    if self.buffer.len() > MAX_BUFFER_BYTES {
+                        log::warn!(
+                            "Discarding oversized CLI text record after {} buffered bytes",
+                            self.buffer.len()
+                        );
+                        self.buffer.clear();
+                        self.discarding_text = true;
+                    }
                 }
                 continue;
             }
@@ -160,6 +179,7 @@ impl JsonFramer {
         self.depth = 0;
         self.in_string = false;
         self.escaped = false;
+        self.discarding_text = false;
         self.discarding = false;
         self.discard_line_start = false;
         self.discard_closing_line = false;
@@ -201,14 +221,14 @@ mod tests {
     fn test_chunk_can_contain_text_and_multiple_json_events() {
         let mut f = JsonFramer::new();
         let frames = f.push_chunk(
-            "Filen CLI v0.0.36\n{\"type\":\"cycleStarted\"}\n\
+            "Filen CLI v0.0.39-menubar.2\n{\"type\":\"cycleStarted\"}\n\
              {\n  \"type\": \"cycleSuccess\"\n}\n",
         );
 
         assert_eq!(
             frames,
             vec![
-                Frame::Text("Filen CLI v0.0.36".to_string()),
+                Frame::Text("Filen CLI v0.0.39-menubar.2".to_string()),
                 json(r#"{"type":"cycleStarted"}"#),
                 json("{\n  \"type\": \"cycleSuccess\"\n}"),
             ]
@@ -296,6 +316,32 @@ mod tests {
 
         let frames = f.push_line(r#"{"type":"cycleSuccess"}"#);
         assert_eq!(frames, vec![json(r#"{"type":"cycleSuccess"}"#)]);
+    }
+
+    #[test]
+    fn test_oversized_top_level_text_recovers_after_newline() {
+        let mut f = JsonFramer::new();
+        let oversized = "x".repeat(MAX_BUFFER_BYTES + 1);
+
+        assert!(f.push_chunk(&oversized).is_empty());
+        assert!(f.buffer.is_empty());
+        assert!(f.discarding_text);
+
+        let frames = f.push_chunk("\n{\"type\":\"cycleSuccess\"}\n");
+        assert_eq!(frames, vec![json(r#"{"type":"cycleSuccess"}"#)]);
+        assert!(!f.discarding_text);
+    }
+
+    #[test]
+    fn test_oversized_top_level_whitespace_is_bounded_and_recovers() {
+        let mut f = JsonFramer::new();
+        let oversized = " ".repeat(MAX_BUFFER_BYTES + 1);
+
+        assert!(f.push_chunk(&oversized).is_empty());
+        assert!(f.buffer.is_empty());
+
+        let frames = f.push_chunk("\nhealthy diagnostic\n");
+        assert_eq!(frames, vec![Frame::Text("healthy diagnostic".to_string())]);
     }
 
     #[test]
