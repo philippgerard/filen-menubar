@@ -124,8 +124,9 @@ done
 # shellcheck disable=SC2016
 grep -Fq -- '--entitlements src-tauri/filen-cli.entitlements "$helper"' "$build_workflow"
 grep -Fq 'com.apple.security.cs.allow-jit' "${repo_root}/src-tauri/filen-cli.entitlements"
-if [[ "$(plutil -convert json -o - "${repo_root}/src-tauri/filen-cli.entitlements" | \
-    python3 -c 'import json,sys; data=json.load(sys.stdin); print("\n".join(sorted(data)))')" != \
+if [[ "$(python3 -c \
+    'import plistlib,sys; data=plistlib.load(open(sys.argv[1], "rb")); print("\n".join(sorted(data)))' \
+    "${repo_root}/src-tauri/filen-cli.entitlements")" != \
     'com.apple.security.cs.allow-jit' ]]; then
     echo "release helper entitlement file must contain only allow-jit" >&2
     exit 1
