@@ -418,6 +418,14 @@ jobs:
           mkdir release-assets
           while IFS= read -r -d '' file; do
             name="$(basename "$file")"
+            # GitHub replaces spaces in uploaded asset names with dots. Apply
+            # the same normalization before collision checks and checksums so
+            # the downloaded filenames match SHA256SUMS exactly.
+            name="${name// /.}"
+            [[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9_-])?$ ]] || {
+              echo "unsupported release asset basename: $name" >&2
+              exit 1
+            }
             [[ ! -e "release-assets/$name" ]] || {
               echo "duplicate release asset basename: $name" >&2
               exit 1
@@ -435,3 +443,40 @@ jobs:
           draft: true
           tag_name: v${{ needs.prepare.outputs.version }}
           files: release-assets/*
+      - name: Verify draft release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          [[ "$(jq -r '.draft' <<<"$release_json")" == true ]]
+
+          expected_names="$(
+            find release-assets -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort
+          )"
+          actual_names="$(
+            jq -r '.assets[] | select(.state == "uploaded") | .name' \
+              <<<"$release_json" | LC_ALL=C sort
+          )"
+          [[ "$actual_names" == "$expected_names" ]] || {
+            echo "draft release asset names differ from the checksummed files" >&2
+            diff -u <(printf '%s\n' "$expected_names") \
+              <(printf '%s\n' "$actual_names") || true
+            exit 1
+          }
+
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            expected_digest="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
+            actual_digest="$(
+              jq -r --arg name "$name" \
+                '.assets[] | select(.name == $name) | .digest' \
+                <<<"$release_json"
+            )"
+            [[ "$actual_digest" == "$expected_digest" ]] || {
+              echo "draft release asset digest mismatch: $name" >&2
+              exit 1
+            }
+          done < <(find release-assets -maxdepth 1 -type f -print0)

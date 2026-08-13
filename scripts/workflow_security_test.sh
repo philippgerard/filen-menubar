@@ -41,6 +41,39 @@ if [[ "$release_guard" != "    if: github.ref == 'refs/heads/main'" ]]; then
     exit 1
 fi
 
+# These are intentional literal shell expressions in the workflow.
+# shellcheck disable=SC2016
+if [[ "$(grep -Fc 'name="${name// /.}"' "$build_workflow")" -ne 1 ]] ||
+    [[ "$(grep -Fc '[[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9_-])?$ ]]' "$build_workflow")" -ne 1 ]]; then
+    echo "release assets must use GitHub's filename normalization before checksumming" >&2
+    exit 1
+fi
+grep -Fq 'name: Verify draft release assets' "$build_workflow"
+grep -Fq 'draft release asset names differ from the checksummed files' "$build_workflow"
+# shellcheck disable=SC2016
+grep -Fq 'draft release asset digest mismatch: $name' "$build_workflow"
+
+normalize_release_asset_name() {
+    local name="${1// /.}"
+    [[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9_-])?$ ]] || return 1
+    printf '%s\n' "$name"
+}
+
+[[ "$(normalize_release_asset_name 'Filen Menubar_0.1.33_aarch64.dmg')" == \
+    'Filen.Menubar_0.1.33_aarch64.dmg' ]]
+[[ "$(normalize_release_asset_name 'already-safe.tar.gz')" == 'already-safe.tar.gz' ]]
+if normalize_release_asset_name 'unsafe@name' >/dev/null ||
+    normalize_release_asset_name '.leading-period' >/dev/null ||
+    normalize_release_asset_name 'trailing-period.' >/dev/null; then
+    echo "release asset normalization accepted a GitHub-unstable basename" >&2
+    exit 1
+fi
+if [[ "$(normalize_release_asset_name 'Filen Menubar')" != \
+    "$(normalize_release_asset_name 'Filen.Menubar')" ]]; then
+    echo "release asset collision fixture did not normalize to one basename" >&2
+    exit 1
+fi
+
 notarize_guard="$(
     awk '/^      - name: Verify and notarize macOS release$/ {
         getline
