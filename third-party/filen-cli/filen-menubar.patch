@@ -240,6 +240,19 @@ index 528d933..f504392 100644
 +		expect((app as unknown as { logs: string }).logs).toBe("")
 +	})
 +})
+diff --git a/src/test/keyringMock.ts b/src/test/keyringMock.ts
+new file mode 100644
+index 0000000..8f38573
+--- /dev/null
++++ b/src/test/keyringMock.ts
+@@ -0,0 +1,7 @@
++import { mock } from "bun:test"
++
++mock.module("@jupiterpi/node-keyring", () => ({
++	deletePassword: () => undefined,
++	getPassword: () => null,
++	setPassword: () => undefined,
++}))
 diff --git a/src/app/featureInterfaces/syncInterface.test.ts b/src/app/featureInterfaces/syncInterface.test.ts
 new file mode 100644
 index 0000000..ac45711

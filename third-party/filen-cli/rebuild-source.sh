@@ -58,7 +58,7 @@ grep -Fq 'const STATE_VERSION = 3' "${source_root}/filen-sync/src/lib/state.ts"
         node_modules/@filen/sdk/dist/node/fs/index.js
     "$bun_bin" ./node_modules/typescript/bin/tsc --noEmit
     "$bun_bin" run lint
-    "$bun_bin" test \
+    "$bun_bin" test --preload ./src/test/keyringMock.ts \
         src/framework/app.test.ts \
         src/app/featureInterfaces/syncInterface.test.ts \
         --timeout 30000

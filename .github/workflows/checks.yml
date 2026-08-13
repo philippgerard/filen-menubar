@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"
+          app_path="$PWD/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"
           helper_path="$app_path/Contents/Helpers/filen-menubar-cli"
           runtime_path="$app_path/Contents/Resources/filen-cli"
           addon_path="$runtime_path/node_modules/@jupiterpi/node-keyring/node-keyring.darwin-arm64.node"

@@ -92,6 +92,11 @@ fi
 grep -Fq -- '--identifier io.filen.menubar.filen-cli.keyring' "$build_workflow"
 grep -Fq 'Contents/Helpers/filen-menubar-cli' "$build_workflow"
 grep -Fq 'Contents/Helpers/filen-menubar-cli' "$checks_workflow"
+if [[ "$(grep -Fc 'app_path="$PWD/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"' "$build_workflow")" -ne 1 ]] ||
+    [[ "$(grep -Fc 'app_path="$PWD/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Filen Menubar.app"' "$checks_workflow")" -ne 1 ]]; then
+    echo "macOS bundle checks must use an absolute app path before changing directories" >&2
+    exit 1
+fi
 grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$build_workflow"
 grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$checks_workflow"
 
