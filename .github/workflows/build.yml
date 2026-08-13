@@ -450,8 +450,17 @@ jobs:
           RELEASE_TAG: v${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
-          [[ "$(jq -r '.draft' <<<"$release_json")" == true ]]
+          # GitHub's release-by-tag endpoint does not expose draft releases.
+          # Select exactly one matching draft from the paginated release list.
+          release_json="$(
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+              jq -c --arg tag "$RELEASE_TAG" \
+                '[.[][] | select(.tag_name == $tag and .draft == true)] |
+                 if length == 1 then .[0]
+                 else error("expected exactly one matching draft release")
+                 end'
+          )"
 
           expected_names="$(
             find release-assets -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort
