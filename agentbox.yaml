@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=https://agent-box.sh/schema/agentbox.schema.json
+# Filen Menubar is a tray application, so the box has no long-running web
+# service. VNC supports GUI testing, and these idempotent tasks prepare the
+# complete Linux build and test toolchain used by CI.
+defaults:
+  box:
+    vnc: true
+
+tasks:
+  system_dependencies:
+    command: |
+      set -euo pipefail
+      sudo apt-get -o Acquire::Retries=3 update
+      sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
+        binutils \
+        build-essential \
+        curl \
+        file \
+        libayatana-appindicator3-dev \
+        libdbus-1-dev \
+        librsvg2-dev \
+        libssl-dev \
+        libwebkit2gtk-4.1-dev \
+        libxdo-dev \
+        pkg-config \
+        rpm \
+        unzip \
+        wget
+      sudo apt-get clean
+    run_once:
+      check: >-
+        for package in binutils build-essential curl file
+        libayatana-appindicator3-dev libdbus-1-dev librsvg2-dev libssl-dev
+        libwebkit2gtk-4.1-dev libxdo-dev pkg-config rpm unzip wget; do
+          dpkg-query -W -f='${Status}' "$package" 2>/dev/null |
+          grep -qx 'install ok installed' || exit 1;
+        done
+
+  rust_toolchain:
+    command: |
+      set -euo pipefail
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+        sh -s -- -y --profile minimal --default-toolchain stable
+      "$HOME/.cargo/bin/rustup" component add rustfmt clippy
+    needs:
+      - system_dependencies
+    run_once:
+      check: >-
+        test -x "$HOME/.cargo/bin/cargo" &&
+        "$HOME/.cargo/bin/rustup" component list --installed |
+        grep -q '^rustfmt-' &&
+        "$HOME/.cargo/bin/rustup" component list --installed |
+        grep -q '^clippy-'
+
+  bun_toolchain:
+    command: |
+      set -euo pipefail
+      curl -fsSL https://bun.sh/install |
+        BUN_INSTALL="$HOME/.local" bash -s 'bun-v1.3.14'
+    needs:
+      - system_dependencies
+    run_once:
+      check: >-
+        test -x "$HOME/.local/bin/bun" &&
+        test "$("$HOME/.local/bin/bun" --version)" = '1.3.14' &&
+        test "$("$HOME/.local/bin/bun" --revision)" = '1.3.14+0d9b296af'
+
+  node_dependencies:
+    command: |
+      set -euo pipefail
+      node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
+      npm ci
+      sha256sum package-lock.json > node_modules/.agentbox-package-lock.sha256
+    needs:
+      - rust_toolchain
+      - bun_toolchain
+    run_once:
+      check: >-
+        test "$(node -p 'Number(process.versions.node.split(".")[0])')" -ge 20 &&
+        test -f node_modules/.agentbox-package-lock.sha256 &&
+        sha256sum --check --status node_modules/.agentbox-package-lock.sha256 &&
+        npm ls --depth=0 >/dev/null 2>&1
