@@ -91,6 +91,12 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      # Rust-cache prunes non-Cargo files under target, leaving incomplete
+      # backend checkouts. Recreate these inputs from the pinned sources.
+      - name: Clear restored backend build inputs
+        shell: bash
+        run: rm -rf -- src-tauri/target/filen-cli-build src-tauri/target/node-runtime-cache
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
