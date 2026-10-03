@@ -1,5 +1,10 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { test } from "node:test"
+import { fileURLToPath } from "node:url"
 import { assessRustAudit, registryAuditLock } from "./audit-rust-backports.mjs"
 
 const report = warnings => ({ settings: { ignore: [], target_arch: [], target_os: [], severity: null, informational_warnings: ["unmaintained", "unsound", "notice"] }, vulnerabilities: { found: false, count: 0, list: [] }, warnings })
@@ -28,4 +33,13 @@ test("malformed audit reports and ignored advisories fail closed", () => {
   for (const invalid of [null, [], {}, { ...report({}), settings: { ...report({}).settings, ignore: ["RUSTSEC-FUTURE"] } }, { ...report({}), settings: { ...report({}).settings, informational_warnings: [] } }, { ...report({}), settings: { ...report({}).settings, target_os: ["macos"] } }, report({ unsound: {} })]) {
     assert.throws(() => assessRustAudit(invalid))
   }
+})
+
+test("the audit fails closed when invoked through a symlinked checkout", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rust-audit-gate-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.symlinkSync(path.dirname(fileURLToPath(import.meta.url)), path.join(root, "scripts"))
+  const result = spawnSync(process.execPath, [path.join(root, "scripts/audit-rust-backports.mjs"), path.join(root, "missing-cargo-audit")], { encoding: "utf8" })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Rust audit failed/)
 })

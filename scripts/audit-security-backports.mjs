@@ -84,6 +84,6 @@ export function auditSecurityBackports(sourceDir, manifestFile, bunBin) {
   console.log("Production audit passed with checksum-verified security backports")
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
   auditSecurityBackports(path.resolve(process.argv[2]), path.resolve(process.argv[3]), process.argv[4] ?? "bun")
 }

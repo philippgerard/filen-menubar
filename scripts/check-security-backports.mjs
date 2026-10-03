@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import fs from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -72,7 +73,7 @@ export function checkSecurityBackports(sourceDir) {
   assert.equal(oaepKeys.privateKey.decrypt(encrypted, "RSA-OAEP", { md: forge.md.sha512.create() }), message)
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
   checkSecurityBackports(process.argv[2])
   console.log("braces and node-forge security regressions and legitimate controls passed")
 }
