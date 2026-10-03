@@ -139,11 +139,17 @@ fi
 grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$build_workflow"
 grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$checks_workflow"
 
+bun_bin="${BUN_BIN:-$(command -v bun || true)}"
+if [[ -z "$bun_bin" ]]; then
+    echo "Bun is required to parse the workflow YAML" >&2
+    exit 1
+fi
+"$bun_bin" "${repo_root}/scripts/check-workflow-build-jobs.mjs"
+
 for workflow in "$build_workflow" "$checks_workflow"; do
     grep -Fq 'name: Package and smoke-rebuild corresponding source' "$workflow"
     grep -Fq 'scripts/package-filen-cli-source.sh' "$workflow"
     grep -Fq 'rebuild-source.sh' "$workflow"
-    grep -Fq 'node-version: 24.18.1' "$workflow"
     grep -Fq 'libdbus-1-dev' "$workflow"
     grep -Fq 'pkg-config' "$workflow"
 done
@@ -181,10 +187,8 @@ if grep -R -Fq 'awalsh128/cache-apt-pkgs-action' "${repo_root}/.github/workflows
 fi
 
 for workflow in "$build_workflow" "$checks_workflow"; do
-    if [[ "$(grep -Fc 'bun-version: 1.3.14' "$workflow")" -ne 1 ]] ||
-        [[ "$(grep -Fc 'run: npm ci' "$workflow")" -ne 1 ]] ||
-        [[ "$(grep -Fc 'bun --revision' "$workflow")" -ne 1 ]]; then
-        echo "workflows must use the pinned Bun helper toolchain and deterministic npm install" >&2
+    if [[ "$(grep -Fc 'run: npm ci' "$workflow")" -ne 1 ]]; then
+        echo "workflows must use deterministic npm install" >&2
         exit 1
     fi
 

@@ -56,19 +56,19 @@ tasks:
     command: |
       set -euo pipefail
       curl -fsSL https://bun.sh/install |
-        BUN_INSTALL="$HOME/.local" bash -s 'bun-v1.3.14'
+        BUN_INSTALL="$HOME/.local" bash -s 'bun-v1.4.2'
     needs:
       - system_dependencies
     run_once:
       check: >-
         test -x "$HOME/.local/bin/bun" &&
-        test "$("$HOME/.local/bin/bun" --version)" = '1.3.14' &&
-        test "$("$HOME/.local/bin/bun" --revision)" = '1.3.14+0d9b296af'
+        test "$("$HOME/.local/bin/bun" --version)" = '1.4.2' &&
+        test "$("$HOME/.local/bin/bun" --revision)" = '1.4.2+744846f84'
 
   node_dependencies:
     command: |
       set -euo pipefail
-      node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
+      node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
       npm ci
       sha256sum package-lock.json > node_modules/.agentbox-package-lock.sha256
     needs:
@@ -76,7 +76,7 @@ tasks:
       - bun_toolchain
     run_once:
       check: >-
-        test "$(node -p 'Number(process.versions.node.split(".")[0])')" -ge 20 &&
+        test "$(node -p 'Number(process.versions.node.split(".")[0])')" -ge 22 &&
         test -f node_modules/.agentbox-package-lock.sha256 &&
         sha256sum --check --status node_modules/.agentbox-package-lock.sha256 &&
         npm ls --depth=0 >/dev/null 2>&1

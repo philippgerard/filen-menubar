@@ -12,7 +12,7 @@ node="${repo_root}/src-tauri/generated/filen-cli-node"
 entrypoint="${repo_root}/src-tauri/generated/filen-cli/filen-cli.cjs"
 [[ -x "$node" ]] || { echo "bundled Node sidecar is missing: ${node}" >&2; exit 1; }
 [[ -f "$entrypoint" ]] || { echo "bundled CLI entrypoint is missing: ${entrypoint}" >&2; exit 1; }
-[[ "$($node --version)" == "v24.18.1" ]] || { echo "unexpected bundled Node version" >&2; exit 1; }
+[[ "$($node --version)" == "v24.21.0" ]] || { echo "unexpected bundled Node version" >&2; exit 1; }
 
 actual="$(NO_COLOR=1 "$node" --disable-warning=DEP0169 "$entrypoint" --skip-update --version)"
 expected="Filen CLI ${version}"

@@ -6,6 +6,7 @@ import path from "node:path"
 import process from "node:process"
 import packageUrl from "packageurl-js"
 import { discoverLicenseEvidence } from "./license-evidence.mjs"
+import { verifyPatchedPackages } from "./audit-security-backports.mjs"
 
 const [
   sourceArg,
@@ -37,6 +38,8 @@ const runtimeSource = path.join(output, "corresponding-source", "runtime-package
 const nodeSourceDirectory = path.join(output, "corresponding-source", "node")
 const notices = []
 const npmPackages = new Map()
+const securityBackports = JSON.parse(await readFile(path.join(source, "patches/security-backports.json"), "utf8"))
+verifyPatchedPackages(source, securityBackports)
 
 const sha256 = value => createHash("sha256").update(value).digest("hex")
 const uuidFromHash = hash => {
@@ -100,6 +103,7 @@ if (uniqueNpm.length < 100) throw new Error(`implausibly small runtime graph: ${
 
 const npmComponents = []
 for (const [directory, manifest] of uniqueNpm) {
+  const backport = securityBackports.find(item => item.package === manifest.name && item.version === manifest.version)
   const licenseEvidence = await discoverLicenseEvidence(directory)
   if (licenseEvidence.length === 0) {
     throw new Error(`runtime package has no substantive license text: ${manifest.name}@${manifest.version}`)
@@ -116,6 +120,7 @@ for (const [directory, manifest] of uniqueNpm) {
   notices.push([
     `${manifest.name}@${manifest.version}`,
     `Declared license: ${manifest.license ?? "see included license text"}`,
+    ...(backport ? [`Security source backport: ${backport.advisory}`, `Patched package tree SHA-256: ${backport.treeSha256}`, `Upstream patch: ${backport.upstream} at ${backport.commit}`] : []),
     ...licenseEvidence.map(item => `--- ${item.source} ---\n${item.text}`),
   ].join("\n"))
   const purl = npmPurl(manifest.name, manifest.version)
@@ -126,7 +131,14 @@ for (const [directory, manifest] of uniqueNpm) {
     version: manifest.version,
     purl,
     licenses: manifest.license ? [{ license: { name: String(manifest.license) } }] : undefined,
-    properties: [{ name: "filen-menubar:ecosystem", value: "npm" }],
+    properties: [
+      { name: "filen-menubar:ecosystem", value: "npm" },
+      ...(backport ? [
+        { name: "filen-menubar:security-backport", value: backport.advisory },
+        { name: "filen-menubar:patched-package-sha256", value: backport.treeSha256 },
+        { name: "filen-menubar:upstream-patch-commit", value: backport.commit },
+      ] : []),
+    ],
   })
 }
 

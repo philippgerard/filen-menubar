@@ -1,0 +1,1054 @@
+--- a/glib-macros/Cargo.toml
++++ b/glib-macros/Cargo.toml
+@@ -36,9 +36,6 @@
+ [dependencies.proc-macro-crate]
+ version = "2.0"
+ 
+-[dependencies.proc-macro-error]
+-version = "1.0"
+-
+ [dependencies.proc-macro2]
+ version = "1.0"
+ 
+--- a/glib-macros/Cargo.toml.orig
++++ b/glib-macros/Cargo.toml.orig
+@@ -13,7 +13,6 @@
+ 
+ [dependencies]
+ heck = "0.4"
+-proc-macro-error = "1.0"
+ proc-macro2 = "1.0"
+ quote = "1.0"
+ syn = { version = "2.0", features = ["full"] }
+--- a/glib-macros/src/boxed_derive.rs
++++ b/glib-macros/src/boxed_derive.rs
+@@ -1,7 +1,6 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use proc_macro2::{Ident, TokenStream};
+-use proc_macro_error::abort_call_site;
+ use quote::quote;
+ 
+ use crate::utils::{crate_ident_new, parse_nested_meta_items, NestedMetaItem};
+@@ -91,7 +90,7 @@
+     }
+ }
+ 
+-pub fn impl_boxed(input: &syn::DeriveInput) -> TokenStream {
++pub fn impl_boxed(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+     let name = &input.ident;
+ 
+     let mut gtype_name = NestedMetaItem::<syn::LitStr>::new("name")
+@@ -103,17 +102,14 @@
+         &input.attrs,
+         "boxed_type",
+         &mut [&mut gtype_name, &mut nullable],
+-    );
+-
+-    match found {
+-        Ok(None) => {
+-            abort_call_site!(
+-                "#[derive(glib::Boxed)] requires #[boxed_type(name = \"BoxedTypeName\")]"
+-            )
+-        }
+-        Err(e) => return e.to_compile_error(),
+-        Ok(_) => {}
+-    };
++    )?;
++
++    if found.is_none() {
++        return Err(syn::Error::new_spanned(
++            input,
++            "#[derive(glib::Boxed)] requires #[boxed_type(name = \"BoxedTypeName\")]",
++        ));
++    }
+ 
+     let gtype_name = gtype_name.value.unwrap();
+     let nullable = nullable.found || nullable.value.map(|b| b.value()).unwrap_or(false);
+@@ -131,7 +127,7 @@
+         quote! {}
+     };
+ 
+-    quote! {
++    Ok(quote! {
+         impl #crate_ident::subclass::boxed::BoxedType for #name {
+             const NAME: &'static ::core::primitive::str = #gtype_name;
+         }
+@@ -284,5 +280,5 @@
+                 |name| Self::ParamSpec::builder(name)
+             }
+         }
+-    }
+-}
++    })
++}
+--- a/glib-macros/src/closure.rs
++++ b/glib-macros/src/closure.rs
+@@ -1,7 +1,6 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use proc_macro2::{Ident, Span, TokenStream};
+-use proc_macro_error::abort;
+ use quote::{quote, ToTokens, TokenStreamExt};
+ use syn::{ext::IdentExt, spanned::Spanned, Token};
+ 
+@@ -91,17 +90,17 @@
+             .map(|i| i.to_string())
+             .collect::<Vec<_>>()
+             .join("-");
+-        Ok(match keyword.as_str() {
+-            "strong" => CaptureKind::Strong,
+-            "watch" => CaptureKind::Watch,
+-            "weak-allow-none" => CaptureKind::WeakAllowNone,
+-            "to-owned" => CaptureKind::ToOwned,
+-            k => abort!(
+-                idents,
+-                "Unknown keyword `{}`, only `watch`, `weak-allow-none`, `to-owned` and `strong` are allowed",
+-                k,
+-            ),
+-        })
++        match keyword.as_str() {
++            "strong" => Ok(CaptureKind::Strong),
++            "watch" => Ok(CaptureKind::Watch),
++            "weak-allow-none" => Ok(CaptureKind::WeakAllowNone),
++            "to-owned" => Ok(CaptureKind::ToOwned),
++            k => Err(syn::Error::new(
++                idents.span(),
++                format!("Unknown keyword `{}`, only `watch`, `weak-allow-none`, `to-owned` and `strong` are allowed",
++                k),
++            )),
++        }
+     }
+ }
+ 
+@@ -124,18 +123,20 @@
+         };
+         if alias.is_none() {
+             if name.to_string() == "self" {
+-                abort!(
++                return Err(syn::Error::new_spanned(
+                     name,
+                     "Can't use `self` as variable name. Try storing it in a temporary variable or \
+-                    rename it using `as`."
+-                );
++                    rename it using `as`.",
++                ));
+             }
+             if name.to_string().contains('.') {
+-                abort!(
++                return Err(syn::Error::new(
+                     name.span(),
+-                    "`{}`: Field accesses are not allowed as is, you must rename it!",
+-                    name
+-                );
++                    format!(
++                        "`{}`: Field accesses are not allowed as is, you must rename it!",
++                        name
++                    ),
++                ));
+             }
+         }
+         Ok(Capture {
+@@ -162,11 +163,10 @@
+                 let capture = input.parse::<Capture>()?;
+                 if capture.kind == CaptureKind::Watch {
+                     if let Some(existing) = captures.iter().find(|c| c.kind == CaptureKind::Watch) {
+-                        abort!(
+-                            capture.start,
+-                            "Only one `@watch` capture is allowed per closure";
+-                            note = existing.start => "Previous `@watch` found here"
+-                        );
++                        return Err(syn::Error::new(
++                            existing.start,
++                            "Only one `@watch` capture is allowed per closure",
++                        ));
+                     }
+                 }
+                 captures.push(capture);
+@@ -185,13 +185,16 @@
+         }
+         let mut closure = input.parse::<syn::ExprClosure>()?;
+         if closure.asyncness.is_some() {
+-            abort!(closure, "Async closure not allowed");
++            return Err(syn::Error::new_spanned(
++                closure,
++                "Async closure not allowed",
++            ));
+         }
+         if !captures.is_empty() && closure.capture.is_none() {
+-            abort!(
++            return Err(syn::Error::new_spanned(
+                 closure,
+-                "Closure with captures needs to be \"moved\" so please add `move` before closure"
+-            )
++                "Closure with captures needs to be \"moved\" so please add `move` before closure",
++            ));
+         }
+         let args = closure
+             .inputs
+--- a/glib-macros/src/derived_properties_attribute.rs
++++ b/glib-macros/src/derived_properties_attribute.rs
+@@ -1,13 +1,12 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-use proc_macro2::TokenStream;
+-use proc_macro_error::abort_call_site;
++use proc_macro2::{Span, TokenStream};
+ use quote::quote;
+ 
+ pub const WRONG_PLACE_MSG: &str =
+     "This macro should be used on `impl` block for `glib::ObjectImpl` trait";
+ 
+-pub fn impl_derived_properties(input: &syn::ItemImpl) -> TokenStream {
++pub fn impl_derived_properties(input: &syn::ItemImpl) -> syn::Result<TokenStream> {
+     let syn::ItemImpl {
+         attrs,
+         generics,
+@@ -17,10 +16,10 @@
+         ..
+     } = input;
+ 
+-    let trait_path = match &trait_ {
+-        Some(path) => &path.1,
+-        None => abort_call_site!(WRONG_PLACE_MSG),
+-    };
++    let trait_path = &trait_
++        .as_ref()
++        .ok_or_else(|| syn::Error::new(Span::call_site(), WRONG_PLACE_MSG))?
++        .1;
+ 
+     let mut has_property = false;
+     let mut has_properties = false;
+@@ -66,11 +65,11 @@
+         (!has_property).then_some(property),
+     ];
+ 
+-    quote!(
++    Ok(quote!(
+         #(#attrs)*
+         impl #generics #trait_path for #self_ty {
+             #(#items)*
+             #(#generated)*
+         }
+-    )
++    ))
+ }
+--- a/glib-macros/src/enum_derive.rs
++++ b/glib-macros/src/enum_derive.rs
+@@ -2,7 +2,6 @@
+ 
+ use heck::{ToKebabCase, ToUpperCamelCase};
+ use proc_macro2::TokenStream;
+-use proc_macro_error::abort_call_site;
+ use quote::{quote, quote_spanned};
+ use syn::{punctuated::Punctuated, spanned::Spanned, token::Comma, Data, Ident, Variant};
+ 
+@@ -59,33 +58,37 @@
+     )
+ }
+ 
+-pub fn impl_enum(input: &syn::DeriveInput) -> TokenStream {
++pub fn impl_enum(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+     let name = &input.ident;
+ 
+     let enum_variants = match input.data {
+         Data::Enum(ref e) => &e.variants,
+-        _ => abort_call_site!("#[derive(glib::Enum)] only supports enums"),
++        _ => {
++            return Err(syn::Error::new_spanned(
++                input,
++                "#[derive(glib::Enum)] only supports enums",
++            ))
++        }
+     };
+ 
+     let mut gtype_name = NestedMetaItem::<syn::LitStr>::new("name")
+         .required()
+         .value_required();
+-    let found = parse_nested_meta_items(&input.attrs, "enum_type", &mut [&mut gtype_name]);
+-
+-    match found {
+-        Ok(None) => {
+-            abort_call_site!("#[derive(glib::Enum)] requires #[enum_type(name = \"EnumTypeName\")]")
+-        }
+-        Err(e) => return e.to_compile_error(),
+-        Ok(attr) => attr,
+-    };
++    let found = parse_nested_meta_items(&input.attrs, "enum_type", &mut [&mut gtype_name])?;
++
++    if found.is_none() {
++        return Err(syn::Error::new_spanned(
++            input,
++            "#[derive(glib::Enum)] requires #[enum_type(name = \"EnumTypeName\")]",
++        ));
++    }
+     let gtype_name = gtype_name.value.unwrap();
+     let from_glib = gen_enum_from_glib(name, enum_variants);
+     let (enum_values, nb_enum_values) = gen_enum_values(name, enum_variants);
+ 
+     let crate_ident = crate_ident_new();
+ 
+-    quote! {
++    Ok(quote! {
+         impl #crate_ident::translate::IntoGlib for #name {
+             type GlibType = i32;
+ 
+@@ -198,5 +201,5 @@
+                 |name, default_value| Self::ParamSpec::builder_with_default(name, default_value)
+             }
+         }
+-    }
++    })
+ }
+--- a/glib-macros/src/error_domain_derive.rs
++++ b/glib-macros/src/error_domain_derive.rs
+@@ -1,40 +1,41 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use proc_macro2::TokenStream;
+-use proc_macro_error::abort_call_site;
+ use quote::quote;
+ use syn::Data;
+ 
+ use crate::utils::{crate_ident_new, gen_enum_from_glib, parse_nested_meta_items, NestedMetaItem};
+ 
+-pub fn impl_error_domain(input: &syn::DeriveInput) -> TokenStream {
++pub fn impl_error_domain(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+     let name = &input.ident;
+ 
+     let enum_variants = match input.data {
+         Data::Enum(ref e) => &e.variants,
+-        _ => abort_call_site!("#[derive(glib::ErrorDomain)] only supports enums"),
++        _ => {
++            return Err(syn::Error::new_spanned(
++                input,
++                "#[derive(glib::ErrorDomain)] only supports enums",
++            ))
++        }
+     };
+ 
+     let mut domain_name = NestedMetaItem::<syn::LitStr>::new("name")
+         .required()
+         .value_required();
+-    let found = parse_nested_meta_items(&input.attrs, "error_domain", &mut [&mut domain_name]);
++    let found = parse_nested_meta_items(&input.attrs, "error_domain", &mut [&mut domain_name])?;
+ 
+-    match found {
+-        Ok(None) => {
+-            abort_call_site!(
+-                "#[derive(glib::ErrorDomain)] requires #[error_domain(name = \"domain-name\")]"
+-            )
+-        }
+-        Err(e) => return e.to_compile_error(),
+-        Ok(_) => (),
++    if found.is_none() {
++        return Err(syn::Error::new_spanned(
++            input,
++            "#[derive(glib::ErrorDomain)] requires #[error_domain(name = \"domain-name\")]",
++        ));
+     };
+     let domain_name = domain_name.value.unwrap();
+     let crate_ident = crate_ident_new();
+ 
+     let from_glib = gen_enum_from_glib(name, enum_variants);
+ 
+-    quote! {
++    Ok(quote! {
+         impl #crate_ident::error::ErrorDomain for #name {
+             #[inline]
+             fn domain() -> #crate_ident::Quark {
+@@ -60,5 +61,5 @@
+                 #from_glib
+             }
+         }
+-    }
++    })
+ }
+--- a/glib-macros/src/flags_attribute.rs
++++ b/glib-macros/src/flags_attribute.rs
+@@ -2,7 +2,6 @@
+ 
+ use heck::{ToKebabCase, ToUpperCamelCase};
+ use proc_macro2::TokenStream;
+-use proc_macro_error::abort_call_site;
+ use quote::{quote, quote_spanned};
+ use syn::{
+     punctuated::Punctuated, spanned::Spanned, token::Comma, Attribute, Data, DeriveInput, Ident,
+@@ -114,14 +113,19 @@
+     }
+ }
+ 
+-pub fn impl_flags(attrs: AttrInput, input: &DeriveInput) -> TokenStream {
++pub fn impl_flags(attrs: AttrInput, input: &DeriveInput) -> syn::Result<TokenStream> {
+     let gtype_name = attrs.enum_name.value();
+     let name = &input.ident;
+     let visibility = &input.vis;
+ 
+     let enum_variants = match input.data {
+         Data::Enum(ref e) => &e.variants,
+-        _ => abort_call_site!("#[glib::flags] only supports enums"),
++        _ => {
++            return Err(syn::Error::new_spanned(
++                input,
++                "#[glib::flags] only supports enums",
++            ))
++        }
+     };
+ 
+     let crate_ident = crate_ident_new();
+@@ -129,7 +133,7 @@
+     let bitflags = gen_bitflags(name, visibility, enum_variants, &crate_ident);
+     let (flags_values, nb_flags_values) = gen_flags_values(name, enum_variants);
+ 
+-    quote! {
++    Ok(quote! {
+         #bitflags
+ 
+         impl #crate_ident::translate::IntoGlib for #name {
+@@ -229,5 +233,5 @@
+                 }
+             }
+         }
+-    }
+-}
++    })
++}
+--- a/glib-macros/src/lib.rs
++++ b/glib-macros/src/lib.rs
+@@ -19,7 +19,7 @@
+ 
+ use flags_attribute::AttrInput;
+ use proc_macro::TokenStream;
+-use proc_macro_error::proc_macro_error;
++use proc_macro2::Span;
+ use syn::{parse_macro_input, DeriveInput};
+ use utils::{parse_nested_meta_items_from_stream, NestedMetaItem};
+ 
+@@ -283,7 +283,6 @@
+ /// }
+ /// ```
+ #[proc_macro]
+-#[proc_macro_error]
+ pub fn clone(item: TokenStream) -> TokenStream {
+     clone::clone_inner(item)
+ }
+@@ -423,7 +422,6 @@
+ /// assert_eq!(closure.invoke::<String>(&[]), "Hello Moon!");
+ /// ```
+ #[proc_macro]
+-#[proc_macro_error]
+ pub fn closure(item: TokenStream) -> TokenStream {
+     closure::closure_inner(item, "new")
+ }
+@@ -434,7 +432,6 @@
+ ///
+ /// [`Closure::new_local`]: ../glib/closure/struct.Closure.html#method.new_local
+ #[proc_macro]
+-#[proc_macro_error]
+ pub fn closure_local(item: TokenStream) -> TokenStream {
+     closure::closure_inner(item, "new_local")
+ }
+@@ -461,11 +458,10 @@
+ ///
+ /// [`glib::Value`]: ../glib/value/struct.Value.html
+ #[proc_macro_derive(Enum, attributes(enum_type, enum_value))]
+-#[proc_macro_error]
+ pub fn enum_derive(input: TokenStream) -> TokenStream {
+     let input = parse_macro_input!(input as DeriveInput);
+     let gen = enum_derive::impl_enum(&input);
+-    gen.into()
++    gen.unwrap_or_else(syn::Error::into_compile_error).into()
+ }
+ 
+ /// Attribute macro for defining flags using the `bitflags` crate.
+@@ -499,7 +495,6 @@
+ ///
+ /// [`glib::Value`]: ../glib/value/struct.Value.html
+ #[proc_macro_attribute]
+-#[proc_macro_error]
+ pub fn flags(attr: TokenStream, item: TokenStream) -> TokenStream {
+     let mut name = NestedMetaItem::<syn::LitStr>::new("name")
+         .required()
+@@ -514,7 +509,7 @@
+     };
+     let input = parse_macro_input!(item as DeriveInput);
+     let gen = flags_attribute::impl_flags(attr_meta, &input);
+-    gen.into()
++    gen.unwrap_or_else(syn::Error::into_compile_error).into()
+ }
+ 
+ /// Derive macro for defining a GLib error domain and its associated
+@@ -536,11 +531,11 @@
+ ///
+ /// [`ErrorDomain`]: ../glib/error/trait.ErrorDomain.html
+ #[proc_macro_derive(ErrorDomain, attributes(error_domain))]
+-#[proc_macro_error]
+ pub fn error_domain_derive(input: TokenStream) -> TokenStream {
+     let input = parse_macro_input!(input as DeriveInput);
+-    let gen = error_domain_derive::impl_error_domain(&input);
+-    gen.into()
++    error_domain_derive::impl_error_domain(&input)
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ 
+ /// Derive macro for defining a [`BoxedType`]`::type_` function and
+@@ -565,11 +560,11 @@
+ /// [`BoxedType`]: ../glib/subclass/boxed/trait.BoxedType.html
+ /// [`glib::Value`]: ../glib/value/struct.Value.html
+ #[proc_macro_derive(Boxed, attributes(boxed_type))]
+-#[proc_macro_error]
+ pub fn boxed_derive(input: TokenStream) -> TokenStream {
+     let input = parse_macro_input!(input as DeriveInput);
+-    let gen = boxed_derive::impl_boxed(&input);
+-    gen.into()
++    boxed_derive::impl_boxed(&input)
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ 
+ /// Derive macro for defining a [`SharedType`]`::get_type` function and
+@@ -599,11 +594,11 @@
+ /// [`SharedType`]: ../glib/subclass/shared/trait.SharedType.html
+ /// [`glib::Value`]: ../glib/value/struct.Value.html
+ #[proc_macro_derive(SharedBoxed, attributes(shared_boxed_type))]
+-#[proc_macro_error]
+ pub fn shared_boxed_derive(input: TokenStream) -> TokenStream {
+     let input = parse_macro_input!(input as DeriveInput);
+-    let gen = shared_boxed_derive::impl_shared_boxed(&input);
+-    gen.into()
++    shared_boxed_derive::impl_shared_boxed(&input)
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ 
+ /// Macro for boilerplate of [`ObjectSubclass`] implementations.
+@@ -636,13 +631,17 @@
+ ///
+ /// [`ObjectSubclass`]: ../glib/subclass/types/trait.ObjectSubclass.html
+ #[proc_macro_attribute]
+-#[proc_macro_error]
+ pub fn object_subclass(_attr: TokenStream, item: TokenStream) -> TokenStream {
+-    use proc_macro_error::abort_call_site;
+-    match syn::parse::<syn::ItemImpl>(item) {
+-        Ok(input) => object_subclass_attribute::impl_object_subclass(&input).into(),
+-        Err(_) => abort_call_site!(object_subclass_attribute::WRONG_PLACE_MSG),
+-    }
++    syn::parse::<syn::ItemImpl>(item)
++        .map_err(|_| {
++            syn::Error::new(
++                Span::call_site(),
++                object_subclass_attribute::WRONG_PLACE_MSG,
++            )
++        })
++        .and_then(|input| object_subclass_attribute::impl_object_subclass(&input))
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ 
+ /// Macro for boilerplate of [`ObjectInterface`] implementations.
+@@ -661,13 +660,17 @@
+ ///
+ /// [`ObjectInterface`]: ../glib/subclass/interface/trait.ObjectInterface.html
+ #[proc_macro_attribute]
+-#[proc_macro_error]
+ pub fn object_interface(_attr: TokenStream, item: TokenStream) -> TokenStream {
+-    use proc_macro_error::abort_call_site;
+-    match syn::parse::<syn::ItemImpl>(item) {
+-        Ok(input) => object_interface_attribute::impl_object_interface(&input).into(),
+-        Err(_) => abort_call_site!(object_interface_attribute::WRONG_PLACE_MSG),
+-    }
++    syn::parse::<syn::ItemImpl>(item)
++        .map_err(|_| {
++            syn::Error::new(
++                Span::call_site(),
++                object_interface_attribute::WRONG_PLACE_MSG,
++            )
++        })
++        .and_then(|input| object_interface_attribute::impl_object_interface(&input))
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ 
+ /// Macro for deriving implementations of [`glib::clone::Downgrade`] and
+@@ -840,10 +843,11 @@
+ /// [`FlagsClass`]: ../glib/struct.FlagsClass.html
+ /// [kebab case]: https://docs.rs/heck/0.4.0/heck/trait.ToKebabCase.html
+ #[proc_macro_derive(Variant, attributes(variant_enum))]
+-#[proc_macro_error]
+ pub fn variant_derive(input: TokenStream) -> TokenStream {
+     let input = parse_macro_input!(input as DeriveInput);
+     variant_derive::impl_variant(input)
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ #[proc_macro]
+ pub fn cstr_bytes(item: TokenStream) -> TokenStream {
+@@ -1024,13 +1028,17 @@
+ /// }
+ /// ```
+ #[proc_macro_attribute]
+-#[proc_macro_error]
+ pub fn derived_properties(_attr: TokenStream, item: TokenStream) -> TokenStream {
+-    use proc_macro_error::abort_call_site;
+-    match syn::parse::<syn::ItemImpl>(item) {
+-        Ok(input) => derived_properties_attribute::impl_derived_properties(&input).into(),
+-        Err(_) => abort_call_site!(derived_properties_attribute::WRONG_PLACE_MSG),
+-    }
++    syn::parse::<syn::ItemImpl>(item)
++        .map_err(|_| {
++            syn::Error::new(
++                Span::call_site(),
++                derived_properties_attribute::WRONG_PLACE_MSG,
++            )
++        })
++        .and_then(|input| derived_properties_attribute::impl_derived_properties(&input))
++        .unwrap_or_else(syn::Error::into_compile_error)
++        .into()
+ }
+ 
+ /// # Example
+--- a/glib-macros/src/object_interface_attribute.rs
++++ b/glib-macros/src/object_interface_attribute.rs
+@@ -1,13 +1,12 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-use proc_macro2::TokenStream;
+-use proc_macro_error::abort_call_site;
++use proc_macro2::{Span, TokenStream};
+ use quote::quote;
+ 
+ pub const WRONG_PLACE_MSG: &str =
+     "This macro should be used on `impl` block for `glib::ObjectInterface` trait";
+ 
+-pub fn impl_object_interface(input: &syn::ItemImpl) -> TokenStream {
++pub fn impl_object_interface(input: &syn::ItemImpl) -> syn::Result<TokenStream> {
+     let mut has_prerequisites = false;
+     for item in &input.items {
+         if let syn::ImplItem::Type(type_) = item {
+@@ -38,12 +37,12 @@
+ 
+     let crate_ident = crate::utils::crate_ident_new();
+ 
+-    let trait_path = match &trait_ {
+-        Some(path) => &path.1,
+-        None => abort_call_site!(WRONG_PLACE_MSG),
+-    };
++    let trait_path = &trait_
++        .as_ref()
++        .ok_or_else(|| syn::Error::new(Span::call_site(), WRONG_PLACE_MSG))?
++        .1;
+ 
+-    quote! {
++    Ok(quote! {
+         #(#attrs)*
+         #unsafety impl #generics #trait_path for #self_ty {
+             #prerequisites_opt
+@@ -68,5 +67,5 @@
+                 }
+             }
+         }
+-    }
++    })
+ }
+--- a/glib-macros/src/object_subclass_attribute.rs
++++ b/glib-macros/src/object_subclass_attribute.rs
+@@ -1,13 +1,12 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-use proc_macro2::TokenStream;
+-use proc_macro_error::abort_call_site;
++use proc_macro2::{Span, TokenStream};
+ use quote::quote;
+ 
+ pub const WRONG_PLACE_MSG: &str =
+     "This macro should be used on `impl` block for `glib::ObjectSubclass` trait";
+ 
+-pub fn impl_object_subclass(input: &syn::ItemImpl) -> TokenStream {
++pub fn impl_object_subclass(input: &syn::ItemImpl) -> syn::Result<TokenStream> {
+     let mut has_new = false;
+     let mut has_parent_type = false;
+     let mut has_interfaces = false;
+@@ -75,12 +74,12 @@
+     let instance_opt = (!has_instance)
+         .then(|| quote!(type Instance = #crate_ident::subclass::basic::InstanceStruct<Self>;));
+ 
+-    let trait_path = match &trait_ {
+-        Some(path) => &path.1,
+-        None => abort_call_site!(WRONG_PLACE_MSG),
+-    };
++    let trait_path = &trait_
++        .as_ref()
++        .ok_or_else(|| syn::Error::new(Span::call_site(), WRONG_PLACE_MSG))?
++        .1;
+ 
+-    quote! {
++    Ok(quote! {
+         #(#attrs)*
+         impl #generics #trait_path for #self_ty {
+             #parent_type_opt
+@@ -160,5 +159,5 @@
+                 self
+             }
+         }
+-    }
++    })
+ }
+--- a/glib-macros/src/shared_boxed_derive.rs
++++ b/glib-macros/src/shared_boxed_derive.rs
+@@ -1,7 +1,6 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use proc_macro2::{Ident, TokenStream};
+-use proc_macro_error::abort_call_site;
+ use quote::quote;
+ 
+ use crate::utils::{crate_ident_new, parse_nested_meta_items, NestedMetaItem};
+@@ -93,14 +92,14 @@
+     }
+ }
+ 
+-pub fn impl_shared_boxed(input: &syn::DeriveInput) -> proc_macro2::TokenStream {
++pub fn impl_shared_boxed(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+     let name = &input.ident;
+ 
+-    let refcounted_type = match refcounted_type(input) {
+-        Some(p) => p,
+-        _ => {
+-            abort_call_site!("#[derive(glib::SharedBoxed)] requires struct MyStruct(T: RefCounted)")
+-        }
++    let Some(refcounted_type) = refcounted_type(input) else {
++        return Err(syn::Error::new_spanned(
++            input,
++            "#[derive(glib::SharedBoxed)] requires struct MyStruct(T: RefCounted)",
++        ));
+     };
+ 
+     let mut gtype_name = NestedMetaItem::<syn::LitStr>::new("name")
+@@ -112,17 +111,13 @@
+         &input.attrs,
+         "shared_boxed_type",
+         &mut [&mut gtype_name, &mut nullable],
+-    );
+-
+-    match found {
+-        Ok(None) => {
+-            abort_call_site!(
+-                "#[derive(glib::SharedBoxed)] requires #[shared_boxed_type(name = \"SharedBoxedTypeName\")]"
+-            )
+-        }
+-        Err(e) => return e.to_compile_error(),
+-        _ => (),
+-    };
++    )?;
++
++    if found.is_none() {
++        return Err(syn::Error::new_spanned(input,
++            "#[derive(glib::SharedBoxed)] requires #[shared_boxed_type(name = \"SharedBoxedTypeName\")]"
++        ));
++    }
+ 
+     let gtype_name = gtype_name.value.unwrap();
+     let nullable = nullable.found || nullable.value.map(|b| b.value()).unwrap_or(false);
+@@ -142,7 +137,7 @@
+         quote! {}
+     };
+ 
+-    quote! {
++    Ok(quote! {
+         impl #crate_ident::subclass::shared::SharedType for #name {
+             const NAME: &'static ::core::primitive::str = #gtype_name;
+ 
+@@ -319,5 +314,5 @@
+                 |name| Self::ParamSpec::builder(name)
+             }
+         }
+-    }
+-}
++    })
++}
+--- a/glib-macros/src/variant_derive.rs
++++ b/glib-macros/src/variant_derive.rs
+@@ -1,20 +1,21 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use heck::ToKebabCase;
+-use proc_macro::TokenStream;
+-use proc_macro_error::abort;
++use proc_macro2::TokenStream;
+ use quote::{format_ident, quote};
+ use syn::{Data, DeriveInput, Fields, FieldsNamed, FieldsUnnamed, Generics, Ident, Type};
+ 
+ use crate::utils::crate_ident_new;
+ 
+-pub fn impl_variant(input: DeriveInput) -> TokenStream {
++pub fn impl_variant(input: DeriveInput) -> syn::Result<TokenStream> {
+     match input.data {
+-        Data::Struct(data_struct) => {
+-            derive_variant_for_struct(input.ident, input.generics, data_struct)
+-        }
++        Data::Struct(data_struct) => Ok(derive_variant_for_struct(
++            input.ident,
++            input.generics,
++            data_struct,
++        )),
+         Data::Enum(data_enum) => {
+-            let mode = get_enum_mode(&input.attrs);
++            let mode = get_enum_mode(&input.attrs)?;
+             let has_data = data_enum
+                 .variants
+                 .iter()
+@@ -22,12 +23,18 @@
+             if has_data {
+                 derive_variant_for_enum(input.ident, input.generics, data_enum, mode)
+             } else {
+-                derive_variant_for_c_enum(input.ident, input.generics, data_enum, mode)
+-            }
+-        }
+-        Data::Union(..) => {
+-            panic!("#[derive(glib::Variant)] is not available for unions.");
+-        }
++                Ok(derive_variant_for_c_enum(
++                    input.ident,
++                    input.generics,
++                    data_enum,
++                    mode,
++                ))
++            }
++        }
++        Data::Union(..) => Err(syn::Error::new_spanned(
++            input,
++            "#[derive(glib::Variant)] is not available for unions.",
++        )),
+     }
+ }
+ 
+@@ -236,15 +243,13 @@
+         }
+     };
+ 
+-    let derived = quote! {
++    quote! {
+         #static_variant_type
+ 
+         #to_variant
+ 
+         #from_variant
+-    };
+-
+-    derived.into()
++    }
+ }
+ 
+ enum EnumMode {
+@@ -291,7 +296,7 @@
+     generics: Generics,
+     data_enum: syn::DataEnum,
+     mode: EnumMode,
+-) -> TokenStream {
++) -> syn::Result<TokenStream> {
+     let glib = crate_ident_new();
+     let static_variant_type = format!("({}v)", mode.tag_type());
+     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+@@ -309,13 +314,13 @@
+         if !matches!(v.fields, syn::Fields::Unit) {
+             match &mode {
+                 EnumMode::Enum { .. } =>
+-                    abort!(v, "#[variant_enum(enum) only allowed with C-style enums using #[derive(glib::Enum)]"),
++                    return Err(syn::Error::new_spanned(v, "#[variant_enum(enum) only allowed with C-style enums using #[derive(glib::Enum)]")),
+                 EnumMode::Flags { .. } =>
+-                    abort!(v, "#[variant_enum(flags) only allowed with bitflags using #[glib::flags]"),
++                    return Err(syn::Error::new_spanned(v, "#[variant_enum(flags) only allowed with bitflags using #[glib::flags]")),
+                 _ => (),
+             }
+         }
+-        match &v.fields {
++        Ok(match &v.fields {
+             syn::Fields::Named(FieldsNamed { named, .. }) => {
+                 let field_names = named.iter().map(|f| f.ident.as_ref().unwrap());
+                 let field_names2 = field_names.clone();
+@@ -350,8 +355,8 @@
+                     ))
+                 }
+             },
+-        }
+-    });
++        })
++    }).collect::<Result<Vec<_>, _>>()?;
+     let into = data_enum.variants.iter().enumerate().map(|(index, v)| {
+         let field_ident = &v.ident;
+         let tag = match &mode {
+@@ -448,7 +453,7 @@
+         _ => unimplemented!(),
+     };
+ 
+-    let derived = quote! {
++    Ok(quote! {
+         impl #impl_generics #glib::StaticVariantType for #ident #type_generics #where_clause {
+             #[inline]
+             fn static_variant_type() -> ::std::borrow::Cow<'static, #glib::VariantTy> {
+@@ -488,8 +493,7 @@
+                 }
+             }
+         }
+-    };
+-    derived.into()
++    })
+ }
+ 
+ fn derive_variant_for_c_enum(
+@@ -592,7 +596,7 @@
+         ),
+     };
+ 
+-    let derived = quote! {
++    quote! {
+         impl #impl_generics #glib::StaticVariantType for #ident #type_generics #where_clause {
+             #[inline]
+             fn static_variant_type() -> ::std::borrow::Cow<'static, #glib::VariantTy> {
+@@ -622,16 +626,14 @@
+                 #from_variant
+             }
+         }
+-    };
+-    derived.into()
+-}
+-
+-fn get_enum_mode(attrs: &[syn::Attribute]) -> EnumMode {
++    }
++}
++
++fn get_enum_mode(attrs: &[syn::Attribute]) -> syn::Result<EnumMode> {
+     let attr = attrs.iter().find(|a| a.path().is_ident("variant_enum"));
+ 
+-    let attr = match attr {
+-        Some(attr) => attr,
+-        None => return EnumMode::String,
++    let Some(attr) = attr else {
++        return Ok(EnumMode::String);
+     };
+ 
+     let mut repr_attr = None;
+@@ -640,27 +642,31 @@
+         match meta.path.get_ident().map(|id| id.to_string()).as_deref() {
+             Some("repr") => {
+                 repr_attr = Some(meta.path);
++                Ok(())
+             }
+             Some("enum") => {
+                 mode = EnumMode::Enum { repr: false };
++                Ok(())
+             }
+             Some("flags") => {
+                 mode = EnumMode::Flags { repr: false };
+-            }
+-            _ => abort!(meta.path, "unknown type in #[variant_enum] attribute"),
+-        }
+-        Ok(())
+-    })
+-    .unwrap();
+-    match mode {
++                Ok(())
++            }
++            _ => Err(syn::Error::new_spanned(
++                meta.path,
++                "unknown type in #[variant_enum] attribute",
++            )),
++        }
++    })?;
++    Ok(match mode {
+         EnumMode::String if repr_attr.is_some() => {
+             let repr_attr = repr_attr.unwrap();
+-            let repr = get_repr(attrs).unwrap_or_else(|| {
+-                abort!(
++            let repr = get_repr(attrs).ok_or_else(|| {
++                syn::Error::new_spanned(
+                     repr_attr,
+-                    "Must have #[repr] attribute with one of i8, i16, i32, i64, u8, u16, u32, u64"
++                    "Must have #[repr] attribute with one of i8, i16, i32, i64, u8, u16, u32, u64",
+                 )
+-            });
++            })?;
+             EnumMode::Repr(repr)
+         }
+         EnumMode::Enum { .. } => EnumMode::Enum {
+@@ -670,7 +676,7 @@
+             repr: repr_attr.is_some(),
+         },
+         e => e,
+-    }
++    })
+ }
+ 
+ fn get_repr(attrs: &[syn::Attribute]) -> Option<Ident> {
+--- /dev/null
++++ b/glib-macros/tests/diagnostics.rs
+@@ -0,0 +1,68 @@
++// Regression coverage for the proc-macro-error removal backport. Compile actual
++// invocations so parser errors remain compiler diagnostics rather than panics.
++
++#[test]
++fn invalid_inputs_report_compiler_errors() {
++    let cases = trybuild2::TestCases::new();
++    let invalid = [
++        (
++            "enum_requires_enum",
++            "#[derive(glib::Enum)] struct Invalid; fn main() {}",
++            "#[derive(glib::Enum)] only supports enums",
++        ),
++        (
++            "enum_requires_name",
++            "#[derive(glib::Enum)] enum Invalid { Value } fn main() {}",
++            "#[derive(glib::Enum)] requires #[enum_type(name = \"EnumTypeName\")]",
++        ),
++        (
++            "flags_requires_enum",
++            "#[glib::flags(name = \"InvalidFlags\")] struct Invalid; fn main() {}",
++            "#[glib::flags] only supports enums",
++        ),
++        (
++            "boxed_requires_name",
++            "#[derive(glib::Boxed)] struct Invalid; fn main() {}",
++            "#[derive(glib::Boxed)] requires #[boxed_type(name = \"BoxedTypeName\")]",
++        ),
++        (
++            "shared_boxed_requires_wrapper",
++            "#[derive(glib::SharedBoxed)] struct Invalid; fn main() {}",
++            "#[derive(glib::SharedBoxed)] requires struct MyStruct(T: RefCounted)",
++        ),
++        (
++            "error_domain_requires_enum",
++            "#[derive(glib::ErrorDomain)] struct Invalid; fn main() {}",
++            "#[derive(glib::ErrorDomain)] only supports enums",
++        ),
++        (
++            "object_subclass_requires_impl",
++            "#[glib::object_subclass] struct Invalid; fn main() {}",
++            "This macro should be used on `impl` block for `glib::ObjectSubclass` trait",
++        ),
++        (
++            "object_interface_requires_trait",
++            "struct Invalid; #[glib::object_interface] impl Invalid {} fn main() {}",
++            "This macro should be used on `impl` block for `glib::ObjectInterface` trait",
++        ),
++        (
++            "derived_properties_requires_trait",
++            "struct Invalid; #[glib::derived_properties] impl Invalid {} fn main() {}",
++            "This macro should be used on `impl` block for `glib::ObjectImpl` trait",
++        ),
++        (
++            "variant_rejects_unknown_mode",
++            "#[derive(glib::Variant)] #[variant_enum(unknown)] enum Invalid { Value } fn main() {}",
++            "unknown type in #[variant_enum] attribute",
++        ),
++        (
++            "closure_rejects_unknown_capture",
++            "fn main() { let _ = glib::closure!(@unknown item => move || {}); }",
++            "Unknown keyword `unknown`",
++        ),
++    ];
++
++    for (name, source, message) in invalid {
++        cases.compile_fail_inline_check_sub(name, source, message);
++    }
++}
