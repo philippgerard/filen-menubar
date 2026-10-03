@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
@@ -27,10 +28,10 @@ for (const [crate, record] of Object.entries(manifest.crates)) {
   visit(path.join(vendor, crate))
   assert.deepEqual(actualFiles.sort(), Object.keys(record.files).sort(), `Unverified source inventory: ${crate}`)
 }
-const cargoManifest = fs.readFileSync(path.join(repo, "src-tauri/Cargo.toml"), "utf8")
-const patchTable = cargoManifest.split("[patch.crates-io]")[1]?.split(/\n\[/)[0]
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--format-version", "1", "--manifest-path", path.join(repo, "src-tauri/Cargo.toml")], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }))
 for (const crate of Object.keys(manifest.crates)) {
-  assert.ok(patchTable?.includes(`${crate} = { path = "../third-party/rust/${crate}" }`), `Missing source patch: ${crate}`)
+  const selected = metadata.packages.filter(record => record.name === crate).map(record => record.manifest_path)
+  assert.deepEqual(selected, [path.join(vendor, crate, "Cargo.toml")], `Missing source patch: ${crate}`)
 }
 const packages = fs.readFileSync(path.join(repo, "src-tauri/Cargo.lock"), "utf8").split("[[package]]").slice(1)
 for (const [crate, version] of [["glib", "0.18.5"], ["glib-macros", "0.18.5"], ["gtk3-macros", "0.18.2"]]) {

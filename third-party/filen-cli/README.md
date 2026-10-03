@@ -29,14 +29,18 @@ Filen dependencies are distributed under AGPL-3.0-only.
 
 The production dependency graph is frozen in `bun.lock`. `braces@3.0.3` and
 `node-forge@1.4.0` carry source backports for GHSA-vfj7-8cjw-p6xm and
-GHSA-86w9-cpqp-85rv. The former applies upstream PR 72 at commit
-`28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, bounding parser and AST recursion
-to 100 levels and detecting parent cycles. The latter applies the nested-child
-check from upstream PR 1152 at commit
-`ceba34402e329f0365134f23fe19898756527d65`, additionally requiring empty
-primitive NULL parameters. Both retain their real upstream package versions.
-The checked-in patch files and `security-backports.json` identify the exact
-source bytes and upstream provenance; neither PR is a released package fix.
+GHSA-86w9-cpqp-85rv. The former applies the `lib/` diff from 3.0.3 to upstream
+PR 72 at commit `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, bounding parser and
+AST recursion to 100 levels and detecting parent cycles. Because that PR is
+based on unreleased upstream `master`, the diff also carries upstream PR 49
+(commas reset block invalidity, so sets starting with a range operator expand)
+and PR 57 (unpaired quotes parse as literal characters instead of consuming the
+remaining input). The `node-forge` backport applies the nested-child check
+from upstream PR 1152 at commit `ceba34402e329f0365134f23fe19898756527d65`,
+additionally requiring empty primitive NULL parameters. Both retain their real
+upstream package versions. The checked-in patch files and
+`security-backports.json` identify the exact source bytes and upstream
+provenance; none of these upstream changes is in a released package.
 
 The builder fails on high or critical production audit findings. The only
 accepted findings are those two exact package/advisory pairs, after every

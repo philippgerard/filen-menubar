@@ -5,6 +5,7 @@
     "advisory": "GHSA-vfj7-8cjw-p6xm",
     "upstream": "https://github.com/micromatch/braces/pull/72",
     "commit": "28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+    "includedUpstreamChanges": "Unreleased master changes under PR 72: commas reset block invalidity (PR 49); unpaired quotes parse as literal characters (PR 57)",
     "treeSha256": "c71b882208d44aa9810b01e4ccd816ef8ba9da0f717a245eced16ac79660a575"
   },
   {

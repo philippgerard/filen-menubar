@@ -139,21 +139,17 @@ fi
 grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$build_workflow"
 grep -Fq '/usr/lib/Filen Menubar/filen-cli/node' "$checks_workflow"
 
-for workflow in "$build_workflow" "$checks_workflow"; do
-    macos_runner="$(grep -E '^[[:space:]]+- platform: macos-' "$workflow")"
-    macos_target="$(awk '/^          - platform: macos-latest$/ { getline; print; exit }' "$workflow")"
-    native_host_check="$(awk '/^      - name: Verify native build host$/ { getline; print; getline; print; exit }' "$workflow")"
-    if [[ "$macos_runner" != '          - platform: macos-latest' ]] ||
-        [[ "$macos_target" != '            target: aarch64-apple-darwin' ]] ||
-        [[ "$native_host_check" != $'        if: matrix.platform == \'macos-latest\'\n        run: test "$(uname -m)" = arm64' ]]; then
-        echo "macOS builds must track the supported latest image and verify a native arm64 host" >&2
-        exit 1
-    fi
+bun_bin="${BUN_BIN:-$(command -v bun || true)}"
+if [[ -z "$bun_bin" ]]; then
+    echo "Bun is required to parse the workflow YAML" >&2
+    exit 1
+fi
+"$bun_bin" "${repo_root}/scripts/check-workflow-build-jobs.mjs"
 
+for workflow in "$build_workflow" "$checks_workflow"; do
     grep -Fq 'name: Package and smoke-rebuild corresponding source' "$workflow"
     grep -Fq 'scripts/package-filen-cli-source.sh' "$workflow"
     grep -Fq 'rebuild-source.sh' "$workflow"
-    grep -Fq 'node-version: 24.21.0' "$workflow"
     grep -Fq 'libdbus-1-dev' "$workflow"
     grep -Fq 'pkg-config' "$workflow"
 done
@@ -191,14 +187,10 @@ if grep -R -Fq 'awalsh128/cache-apt-pkgs-action' "${repo_root}/.github/workflows
 fi
 
 for workflow in "$build_workflow" "$checks_workflow"; do
-    if [[ "$(grep -Fc 'bun-version: 1.4.2' "$workflow")" -ne 1 ]] ||
-        [[ "$(grep -Fc 'run: npm ci' "$workflow")" -ne 1 ]] ||
-        [[ "$(grep -Fc 'bun --revision' "$workflow")" -ne 1 ]]; then
-        echo "workflows must use the pinned Bun helper toolchain and deterministic npm install" >&2
+    if [[ "$(grep -Fc 'run: npm ci' "$workflow")" -ne 1 ]]; then
+        echo "workflows must use deterministic npm install" >&2
         exit 1
     fi
-    # shellcheck disable=SC2016
-    grep -Fq 'run: test "$(bun --revision)" = "1.4.2+744846f84"' "$workflow"
 
     if [[ "$(grep -Fc 'sudo apt-get -o Acquire::Retries=3 update' "$workflow")" -ne 1 ]] ||
         [[ "$(grep -Fc 'sudo apt-get -o Acquire::Retries=3 install -y' "$workflow")" -ne 1 ]]; then
