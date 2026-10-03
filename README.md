@@ -26,7 +26,7 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 No separate Filen CLI or Node.js runtime is required after installation. The
 app bundles `v0.0.39-menubar.2`: a focused build of classic CLI v0.0.39 with
 `@filen/sync` v0.3.7 and `@filen/sdk` v0.4.2. It runs on an app-owned copy of
-the official Node.js v24.18.1 runtime. Neither the helper nor this Node.js
+the official Node.js v24.21.0 runtime. Neither the helper nor this Node.js
 runtime is resolved from `PATH`: the runtime stays private to the application
 bundle on macOS and under `/usr/lib/Filen Menubar/filen-cli/` in Linux packages.
 
@@ -54,8 +54,8 @@ first patched run therefore performs a full tree scan.
 ### Build Dependencies
 
 - [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) (v20+)
-- [Bun](https://bun.sh/) v1.3.14 (exact version, build and test tool only)
+- [Node.js](https://nodejs.org/) (v22+; Node 24 LTS recommended)
+- [Bun](https://bun.sh/) v1.4.2 (exact version, build and test tool only)
 - [Tauri CLI](https://tauri.app/)
 
 **macOS:**
@@ -180,7 +180,7 @@ Or build manually:
 sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
   libappindicator-gtk3 librsvg nodejs npm rust
 
-# Install Bun v1.3.14, then clone and build
+# Install Bun v1.4.2, then clone and build
 git clone https://github.com/philippgerard/filen-menubar.git
 cd filen-menubar
 npm ci
@@ -190,7 +190,7 @@ npm run tauri build
 # Binary will be in src-tauri/target/release/filen-menubar
 ```
 
-The build fails closed if Bun is missing or is not exactly v1.3.14.
+The build fails closed if Bun is missing or is not exactly v1.4.2.
 
 > **Note:** AppImage is not supported because its sandboxing prevents reliable
 > access to the bundled sync-backend resources.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly bun_version="1.3.14"
-readonly bun_revision="1.3.14+0d9b296af"
-readonly node_version="v24.18.1"
+readonly bun_version="1.4.2"
+readonly bun_revision="1.4.2+744846f84"
+readonly node_version="v24.21.0"
 
 source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 output_dir="${1:-${source_root}/rebuilt}"
@@ -48,6 +48,8 @@ grep -Fq 'const STATE_VERSION = 3' "${source_root}/filen-sync/src/lib/state.ts"
 (
     cd "${source_root}/filen-cli"
     "$bun_bin" install --frozen-lockfile --ignore-scripts
+    "$node_bin" "${source_root}/packaging/audit-security-backports.mjs" \
+        "${source_root}/filen-cli" "${source_root}/packaging/security-backports.json" "$bun_bin"
     # Make the included preferred TypeScript source authoritative for the CJS
     # rebuild instead of silently reusing npm's generated sync distribution.
     cp -R "${source_root}/filen-sync/dist/." node_modules/@filen/sync/dist/

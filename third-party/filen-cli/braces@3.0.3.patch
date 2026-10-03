@@ -1,0 +1,695 @@
+diff --git a/lib/compile.js b/lib/compile.js
+--- a/lib/compile.js
++++ b/lib/compile.js
+@@ -1,60 +1,66 @@
+ 'use strict';
+ 
+ const fill = require('fill-range');
+ const utils = require('./utils');
++const { MAX_DEPTH } = require('./constants');
+ 
+ const compile = (ast, options = {}) => {
+-  const walk = (node, parent = {}) => {
++  const maxDepth = Number.isFinite(options.maxDepth) ? Math.min(MAX_DEPTH, options.maxDepth) : MAX_DEPTH;
++
++  const walk = (node, parent = {}, depth = 0) => {
++    if (node.nodes && depth > maxDepth) {
++      throw new RangeError(`AST depth (${depth}), exceeds max depth (${maxDepth})`);
++    }
+     const invalidBlock = utils.isInvalidBrace(parent);
+     const invalidNode = node.invalid === true && options.escapeInvalid === true;
+     const invalid = invalidBlock === true || invalidNode === true;
+     const prefix = options.escapeInvalid === true ? '\\' : '';
+     let output = '';
+ 
+     if (node.isOpen === true) {
+       return prefix + node.value;
+     }
+ 
+     if (node.isClose === true) {
+       console.log('node.isClose', prefix, node.value);
+       return prefix + node.value;
+     }
+ 
+     if (node.type === 'open') {
+       return invalid ? prefix + node.value : '(';
+     }
+ 
+     if (node.type === 'close') {
+       return invalid ? prefix + node.value : ')';
+     }
+ 
+     if (node.type === 'comma') {
+       return node.prev.type === 'comma' ? '' : invalid ? node.value : '|';
+     }
+ 
+     if (node.value) {
+       return node.value;
+     }
+ 
+     if (node.nodes && node.ranges > 0) {
+       const args = utils.reduce(node.nodes);
+       const range = fill(...args, { ...options, wrap: false, toRegex: true, strictZeros: true });
+ 
+       if (range.length !== 0) {
+         return args.length > 1 && range.length > 1 ? `(${range})` : range;
+       }
+     }
+ 
+     if (node.nodes) {
+       for (const child of node.nodes) {
+-        output += walk(child, node);
++        output += walk(child, node, child.nodes ? depth + 1 : depth);
+       }
+     }
+ 
+     return output;
+   };
+ 
+-  return walk(ast);
++  return walk(ast, {}, ast.type === 'root' ? 0 : 1);
+ };
+ 
+ module.exports = compile;
+diff --git a/lib/constants.js b/lib/constants.js
+--- a/lib/constants.js
++++ b/lib/constants.js
+@@ -1,57 +1,58 @@
+ 'use strict';
+ 
+ module.exports = {
++  MAX_DEPTH: 100,
+   MAX_LENGTH: 10000,
+ 
+   // Digits
+   CHAR_0: '0', /* 0 */
+   CHAR_9: '9', /* 9 */
+ 
+   // Alphabet chars.
+   CHAR_UPPERCASE_A: 'A', /* A */
+   CHAR_LOWERCASE_A: 'a', /* a */
+   CHAR_UPPERCASE_Z: 'Z', /* Z */
+   CHAR_LOWERCASE_Z: 'z', /* z */
+ 
+   CHAR_LEFT_PARENTHESES: '(', /* ( */
+   CHAR_RIGHT_PARENTHESES: ')', /* ) */
+ 
+   CHAR_ASTERISK: '*', /* * */
+ 
+   // Non-alphabetic chars.
+   CHAR_AMPERSAND: '&', /* & */
+   CHAR_AT: '@', /* @ */
+   CHAR_BACKSLASH: '\\', /* \ */
+   CHAR_BACKTICK: '`', /* ` */
+   CHAR_CARRIAGE_RETURN: '\r', /* \r */
+   CHAR_CIRCUMFLEX_ACCENT: '^', /* ^ */
+   CHAR_COLON: ':', /* : */
+   CHAR_COMMA: ',', /* , */
+   CHAR_DOLLAR: '$', /* . */
+   CHAR_DOT: '.', /* . */
+   CHAR_DOUBLE_QUOTE: '"', /* " */
+   CHAR_EQUAL: '=', /* = */
+   CHAR_EXCLAMATION_MARK: '!', /* ! */
+   CHAR_FORM_FEED: '\f', /* \f */
+   CHAR_FORWARD_SLASH: '/', /* / */
+   CHAR_HASH: '#', /* # */
+   CHAR_HYPHEN_MINUS: '-', /* - */
+   CHAR_LEFT_ANGLE_BRACKET: '<', /* < */
+   CHAR_LEFT_CURLY_BRACE: '{', /* { */
+   CHAR_LEFT_SQUARE_BRACKET: '[', /* [ */
+   CHAR_LINE_FEED: '\n', /* \n */
+   CHAR_NO_BREAK_SPACE: '\u00A0', /* \u00A0 */
+   CHAR_PERCENT: '%', /* % */
+   CHAR_PLUS: '+', /* + */
+   CHAR_QUESTION_MARK: '?', /* ? */
+   CHAR_RIGHT_ANGLE_BRACKET: '>', /* > */
+   CHAR_RIGHT_CURLY_BRACE: '}', /* } */
+   CHAR_RIGHT_SQUARE_BRACKET: ']', /* ] */
+   CHAR_SEMICOLON: ';', /* ; */
+   CHAR_SINGLE_QUOTE: '\'', /* ' */
+   CHAR_SPACE: ' ', /*   */
+   CHAR_TAB: '\t', /* \t */
+   CHAR_UNDERSCORE: '_', /* _ */
+   CHAR_VERTICAL_LINE: '|', /* | */
+   CHAR_ZERO_WIDTH_NOBREAK_SPACE: '\uFEFF' /* \uFEFF */
+ };
+diff --git a/lib/expand.js b/lib/expand.js
+--- a/lib/expand.js
++++ b/lib/expand.js
+@@ -1,113 +1,120 @@
+ 'use strict';
+ 
+ const fill = require('fill-range');
+ const stringify = require('./stringify');
+ const utils = require('./utils');
++const { MAX_DEPTH } = require('./constants');
+ 
+ const append = (queue = '', stash = '', enclose = false) => {
+   const result = [];
+ 
+   queue = [].concat(queue);
+   stash = [].concat(stash);
+ 
+   if (!stash.length) return queue;
+   if (!queue.length) {
+     return enclose ? utils.flatten(stash).map(ele => `{${ele}}`) : stash;
+   }
+ 
+   for (const item of queue) {
+     if (Array.isArray(item)) {
+       for (const value of item) {
+         result.push(append(value, stash, enclose));
+       }
+     } else {
+       for (let ele of stash) {
+         if (enclose === true && typeof ele === 'string') ele = `{${ele}}`;
+         result.push(Array.isArray(ele) ? append(item, ele, enclose) : item + ele);
+       }
+     }
+   }
+   return utils.flatten(result);
+ };
+ 
++const queueOwner = node => {
++  if (node.type === 'brace' || node.type === 'root' || !node.parent) return node;
++
++  const seen = new Set();
++  while (node.type !== 'brace' && node.type !== 'root' && node.parent) {
++    if (seen.has(node)) {
++      throw new RangeError('AST parent chain contains a cycle');
++    }
++    seen.add(node);
++    node = node.parent;
++  }
++  return node;
++};
++
+ const expand = (ast, options = {}) => {
+   const rangeLimit = options.rangeLimit === undefined ? 1000 : options.rangeLimit;
++  const maxDepth = Number.isFinite(options.maxDepth) ? Math.min(MAX_DEPTH, options.maxDepth) : MAX_DEPTH;
+ 
+-  const walk = (node, parent = {}) => {
++  const walk = (node, parent = {}, depth = 0) => {
++    if (node.nodes && depth > maxDepth) {
++      throw new RangeError(`AST depth (${depth}), exceeds max depth (${maxDepth})`);
++    }
+     node.queue = [];
+ 
+-    let p = parent;
+-    let q = parent.queue;
+-
+-    while (p.type !== 'brace' && p.type !== 'root' && p.parent) {
+-      p = p.parent;
+-      q = p.queue;
+-    }
++    const q = queueOwner(parent).queue;
+ 
+     if (node.invalid || node.dollar) {
+       q.push(append(q.pop(), stringify(node, options)));
+       return;
+     }
+ 
+     if (node.type === 'brace' && node.invalid !== true && node.nodes.length === 2) {
+       q.push(append(q.pop(), ['{}']));
+       return;
+     }
+ 
+     if (node.nodes && node.ranges > 0) {
+       const args = utils.reduce(node.nodes);
+ 
+       if (utils.exceedsLimit(...args, options.step, rangeLimit)) {
+         throw new RangeError('expanded array length exceeds range limit. Use options.rangeLimit to increase or disable the limit.');
+       }
+ 
+       let range = fill(...args, options);
+       if (range.length === 0) {
+         range = stringify(node, options);
+       }
+ 
+       q.push(append(q.pop(), range));
+       node.nodes = [];
+       return;
+     }
+ 
+     const enclose = utils.encloseBrace(node);
+-    let queue = node.queue;
+-    let block = node;
+-
+-    while (block.type !== 'brace' && block.type !== 'root' && block.parent) {
+-      block = block.parent;
+-      queue = block.queue;
+-    }
++    const queue = queueOwner(node).queue;
+ 
+     for (let i = 0; i < node.nodes.length; i++) {
+       const child = node.nodes[i];
+ 
+       if (child.type === 'comma' && node.type === 'brace') {
+         if (i === 1) queue.push('');
+         queue.push('');
+         continue;
+       }
+ 
+       if (child.type === 'close') {
+         q.push(append(q.pop(), queue, enclose));
+         continue;
+       }
+ 
+       if (child.value && child.type !== 'open') {
+         queue.push(append(queue.pop(), child.value));
+         continue;
+       }
+ 
+       if (child.nodes) {
+-        walk(child, node);
++        walk(child, node, child.nodes ? depth + 1 : depth);
+       }
+     }
+ 
+     return queue;
+   };
+ 
+-  return utils.flatten(walk(ast));
++  return utils.flatten(walk(ast, {}, ast.type === 'root' ? 0 : 1));
+ };
+ 
+ module.exports = expand;
+diff --git a/lib/parse.js b/lib/parse.js
+--- a/lib/parse.js
++++ b/lib/parse.js
+@@ -1,331 +1,353 @@
+ 'use strict';
+ 
+ const stringify = require('./stringify');
+ 
+ /**
+  * Constants
+  */
+ 
+ const {
++  MAX_DEPTH,
+   MAX_LENGTH,
+   CHAR_BACKSLASH, /* \ */
+   CHAR_BACKTICK, /* ` */
+   CHAR_COMMA, /* , */
+   CHAR_DOT, /* . */
+   CHAR_LEFT_PARENTHESES, /* ( */
+   CHAR_RIGHT_PARENTHESES, /* ) */
+   CHAR_LEFT_CURLY_BRACE, /* { */
+   CHAR_RIGHT_CURLY_BRACE, /* } */
+   CHAR_LEFT_SQUARE_BRACKET, /* [ */
+   CHAR_RIGHT_SQUARE_BRACKET, /* ] */
+   CHAR_DOUBLE_QUOTE, /* " */
+   CHAR_SINGLE_QUOTE, /* ' */
+   CHAR_NO_BREAK_SPACE,
+   CHAR_ZERO_WIDTH_NOBREAK_SPACE
+ } = require('./constants');
+ 
+ /**
+  * parse
+  */
+ 
+ const parse = (input, options = {}) => {
+   if (typeof input !== 'string') {
+     throw new TypeError('Expected a string');
+   }
+ 
+   const opts = options || {};
+   const max = typeof opts.maxLength === 'number' ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
++  const maxDepth = Number.isFinite(opts.maxDepth) ? Math.min(MAX_DEPTH, opts.maxDepth) : MAX_DEPTH;
+   if (input.length > max) {
+     throw new SyntaxError(`Input length (${input.length}), exceeds max characters (${max})`);
+   }
+ 
+   const ast = { type: 'root', input, nodes: [] };
+   const stack = [ast];
+   let block = ast;
+   let prev = ast;
+   let brackets = 0;
+   const length = input.length;
+   let index = 0;
+   let depth = 0;
++  let nesting = 0;
+   let value;
+ 
+   /**
+    * Helpers
+    */
+ 
+   const advance = () => input[index++];
+   const push = node => {
+     if (node.type === 'text' && prev.type === 'dot') {
+       prev.type = 'text';
+     }
+ 
+     if (prev && prev.type === 'text' && node.type === 'text') {
+       prev.value += node.value;
+       return;
+     }
+ 
+     block.nodes.push(node);
+     node.parent = block;
+     node.prev = prev;
+     prev = node;
+     return node;
+   };
+ 
+   push({ type: 'bos' });
+ 
+   while (index < length) {
+     block = stack[stack.length - 1];
+     value = advance();
+ 
+     /**
+      * Invalid chars
+      */
+ 
+     if (value === CHAR_ZERO_WIDTH_NOBREAK_SPACE || value === CHAR_NO_BREAK_SPACE) {
+       continue;
+     }
+ 
+     /**
+      * Escaped chars
+      */
+ 
+     if (value === CHAR_BACKSLASH) {
+       push({ type: 'text', value: (options.keepEscaping ? value : '') + advance() });
+       continue;
+     }
+ 
+     /**
+      * Right square bracket (literal): ']'
+      */
+ 
+     if (value === CHAR_RIGHT_SQUARE_BRACKET) {
+       push({ type: 'text', value: '\\' + value });
+       continue;
+     }
+ 
+     /**
+      * Left square bracket: '['
+      */
+ 
+     if (value === CHAR_LEFT_SQUARE_BRACKET) {
+       brackets++;
+ 
+       let next;
+ 
+       while (index < length && (next = advance())) {
+         value += next;
+ 
+         if (next === CHAR_LEFT_SQUARE_BRACKET) {
+           brackets++;
+           continue;
+         }
+ 
+         if (next === CHAR_BACKSLASH) {
+           value += advance();
+           continue;
+         }
+ 
+         if (next === CHAR_RIGHT_SQUARE_BRACKET) {
+           brackets--;
+ 
+           if (brackets === 0) {
+             break;
+           }
+         }
+       }
+ 
+       push({ type: 'text', value });
+       continue;
+     }
+ 
+     /**
+      * Parentheses
+      */
+ 
+     if (value === CHAR_LEFT_PARENTHESES) {
++      if (nesting + 1 > maxDepth) {
++        throw new SyntaxError(`Input depth (${nesting + 1}), exceeds max depth (${maxDepth})`);
++      }
++      nesting++;
+       block = push({ type: 'paren', nodes: [] });
+       stack.push(block);
+       push({ type: 'text', value });
+       continue;
+     }
+ 
+     if (value === CHAR_RIGHT_PARENTHESES) {
+       if (block.type !== 'paren') {
+         push({ type: 'text', value });
+         continue;
+       }
+       block = stack.pop();
+       push({ type: 'text', value });
++      nesting--;
+       block = stack[stack.length - 1];
+       continue;
+     }
+ 
+     /**
+      * Quotes: '|"|`
+      */
+ 
+     if (value === CHAR_DOUBLE_QUOTE || value === CHAR_SINGLE_QUOTE || value === CHAR_BACKTICK) {
+-      const open = value;
++      const leftQuote = value;
++      // Looking for the nearest unescaped quote of the same type.
++      // @todo Use negative lookbehind after targeting the node@8.10+
++      const hasRightQuote = input.slice(index).search(new RegExp(`[^\\\\]${leftQuote}|^${leftQuote}`)) !== -1;
++
+       let next;
+ 
+-      if (options.keepQuotes !== true) {
+-        value = '';
+-      }
+-
+-      while (index < length && (next = advance())) {
+-        if (next === CHAR_BACKSLASH) {
+-          value += next + advance();
+-          continue;
+-        }
+-
+-        if (next === open) {
+-          if (options.keepQuotes === true) value += next;
+-          break;
+-        }
+-
+-        value += next;
++      // If there is no right quote, consume an unpaired quote as a regular character.
++      if (hasRightQuote) {
++        if (options.keepQuotes !== true) {
++          value = '';
++        }
++
++        while (index <= length && (next = advance())) {
++          // Skip escaped quotes.
++          if (next === CHAR_BACKSLASH) {
++            value += next + advance();
++            continue;
++          }
++
++          if (next === leftQuote) {
++            if (options.keepQuotes === true) value += next;
++            break;
++          }
++
++          value += next;
++        }
+       }
+ 
+       push({ type: 'text', value });
+       continue;
+     }
+ 
+     /**
+      * Left curly brace: '{'
+      */
+ 
+     if (value === CHAR_LEFT_CURLY_BRACE) {
++      if (nesting + 1 > maxDepth) {
++        throw new SyntaxError(`Input depth (${nesting + 1}), exceeds max depth (${maxDepth})`);
++      }
++      nesting++;
+       depth++;
+ 
+       const dollar = prev.value && prev.value.slice(-1) === '$' || block.dollar === true;
+       const brace = {
+         type: 'brace',
+         open: true,
+         close: false,
+         dollar,
+         depth,
+         commas: 0,
+         ranges: 0,
+         nodes: []
+       };
+ 
+       block = push(brace);
+       stack.push(block);
+       push({ type: 'open', value });
+       continue;
+     }
+ 
+     /**
+      * Right curly brace: '}'
+      */
+ 
+     if (value === CHAR_RIGHT_CURLY_BRACE) {
+       if (block.type !== 'brace') {
+         push({ type: 'text', value });
+         continue;
+       }
+ 
+       const type = 'close';
+       block = stack.pop();
+       block.close = true;
+ 
+       push({ type, value });
+       depth--;
++      nesting--;
+ 
+       block = stack[stack.length - 1];
+       continue;
+     }
+ 
+     /**
+      * Comma: ','
+      */
+ 
+     if (value === CHAR_COMMA && depth > 0) {
+       if (block.ranges > 0) {
+         block.ranges = 0;
+         const open = block.nodes.shift();
+         block.nodes = [open, { type: 'text', value: stringify(block) }];
+       }
++      block.invalid = false;
+ 
+       push({ type: 'comma', value });
+       block.commas++;
+       continue;
+     }
+ 
+     /**
+      * Dot: '.'
+      */
+ 
+     if (value === CHAR_DOT && depth > 0 && block.commas === 0) {
+       const siblings = block.nodes;
+ 
+       if (depth === 0 || siblings.length === 0) {
+         push({ type: 'text', value });
+         continue;
+       }
+ 
+       if (prev.type === 'dot') {
+         block.range = [];
+         prev.value += value;
+         prev.type = 'range';
+ 
+         if (block.nodes.length !== 3 && block.nodes.length !== 5) {
+           block.invalid = true;
+           block.ranges = 0;
+           prev.type = 'text';
+           continue;
+         }
+ 
+         block.ranges++;
+         block.args = [];
+         continue;
+       }
+ 
+       if (prev.type === 'range') {
+         siblings.pop();
+ 
+         const before = siblings[siblings.length - 1];
+         before.value += prev.value + value;
+         prev = before;
+         block.ranges--;
+         continue;
+       }
+ 
+       push({ type: 'dot', value });
+       continue;
+     }
+ 
+     /**
+      * Text
+      */
+ 
+     push({ type: 'text', value });
+   }
+ 
+   // Mark imbalanced braces and brackets as invalid
+   do {
+     block = stack.pop();
+ 
+     if (block.type !== 'root') {
+       block.nodes.forEach(node => {
+         if (!node.nodes) {
+           if (node.type === 'open') node.isOpen = true;
+           if (node.type === 'close') node.isClose = true;
+           if (!node.nodes) node.type = 'text';
+           node.invalid = true;
+         }
+       });
+ 
+       // get the location of the block on parent.nodes (block's siblings)
+       const parent = stack[stack.length - 1];
+       const index = parent.nodes.indexOf(block);
+       // replace the (invalid) block with it's nodes
+       parent.nodes.splice(index, 1, ...block.nodes);
+     }
+   } while (stack.length > 0);
+ 
+   push({ type: 'eos' });
+   return ast;
+ };
+ 
+ module.exports = parse;
+diff --git a/lib/stringify.js b/lib/stringify.js
+--- a/lib/stringify.js
++++ b/lib/stringify.js
+@@ -1,32 +1,37 @@
+ 'use strict';
+ 
+ const utils = require('./utils');
++const { MAX_DEPTH } = require('./constants');
+ 
+ module.exports = (ast, options = {}) => {
+-  const stringify = (node, parent = {}) => {
++  const maxDepth = Number.isFinite(options.maxDepth) ? Math.min(MAX_DEPTH, options.maxDepth) : MAX_DEPTH;
++
++  const stringify = (node, parent = {}, depth = 0) => {
++    if (node.nodes && depth > maxDepth) {
++      throw new RangeError(`AST depth (${depth}), exceeds max depth (${maxDepth})`);
++    }
+     const invalidBlock = options.escapeInvalid && utils.isInvalidBrace(parent);
+     const invalidNode = node.invalid === true && options.escapeInvalid === true;
+     let output = '';
+ 
+     if (node.value) {
+       if ((invalidBlock || invalidNode) && utils.isOpenOrClose(node)) {
+         return '\\' + node.value;
+       }
+       return node.value;
+     }
+ 
+     if (node.value) {
+       return node.value;
+     }
+ 
+     if (node.nodes) {
+       for (const child of node.nodes) {
+-        output += stringify(child);
++        output += stringify(child, undefined, child.nodes ? depth + 1 : depth);
+       }
+     }
+     return output;
+   };
+ 
+-  return stringify(ast);
++  return stringify(ast, {}, ast.type === 'root' ? 0 : 1);
+ };
+-

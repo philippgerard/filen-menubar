@@ -129,14 +129,14 @@ build_app() {
     if command -v node &>/dev/null; then
         node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
     fi
-    if [[ ! "$node_major" =~ ^[0-9]+$ ]] || ((node_major < 20)); then
-        print_error "Node.js 20 or newer is required to build Filen Menubar."
+    if [[ ! "$node_major" =~ ^[0-9]+$ ]] || ((node_major < 22)); then
+        print_error "Node.js 22 or newer is required to build Filen Menubar."
         print_warning "This is a build dependency only; installed app bundles its own runtime."
         exit 1
     fi
 
-    if ! command -v bun &>/dev/null || [ "$(bun --version)" != "1.3.14" ]; then
-        print_error "Bun 1.3.14 is required to build the bundled Filen CLI."
+    if ! command -v bun &>/dev/null || [ "$(bun --version)" != "1.4.2" ]; then
+        print_error "Bun 1.4.2 is required to build the bundled Filen CLI."
         print_warning "Install that exact version from https://bun.sh before continuing."
         exit 1
     fi

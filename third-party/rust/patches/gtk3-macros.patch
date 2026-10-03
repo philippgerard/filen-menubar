@@ -1,0 +1,258 @@
+--- a/gtk3-macros/Cargo.toml
++++ b/gtk3-macros/Cargo.toml
+@@ -52,9 +52,6 @@
+ [dependencies.proc-macro-crate]
+ version = "1.0"
+ 
+-[dependencies.proc-macro-error]
+-version = "1.0"
+-
+ [dependencies.proc-macro2]
+ version = "1.0"
+ 
+@@ -67,3 +64,10 @@
+ 
+ [dev-dependencies.gtk]
+ version = "0.18"
++
++[dev-dependencies.trybuild2]
++version = "1.1"
++
++[[test]]
++name = "diagnostics"
++path = "tests/diagnostics.rs"
+--- a/gtk3-macros/Cargo.toml.orig
++++ b/gtk3-macros/Cargo.toml.orig
+@@ -20,7 +20,6 @@
+ proc-macro = true
+ 
+ [dependencies]
+-proc-macro-error = "1.0"
+ proc-macro2 = "1.0"
+ quote = "1.0"
+ syn = { version = "2.0", features = ["full"] }
+@@ -28,3 +27,8 @@
+ 
+ [dev-dependencies]
+ gtk = { version = "0.18", path = "../gtk" }
++trybuild2 = "1.1"
++
++[[test]]
++name = "diagnostics"
++path = "tests/diagnostics.rs"
+--- a/gtk3-macros/src/attribute_parser.rs
++++ b/gtk3-macros/src/attribute_parser.rs
+@@ -1,6 +1,6 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-use proc_macro2::Span;
++use proc_macro2::{Span, TokenStream};
+ use syn::spanned::Spanned;
+ use syn::{
+     parse::{Error, Parse, ParseStream},
+@@ -46,14 +46,26 @@
+ 
+ #[derive(Debug)]
+ pub enum ParseTemplateSourceError {
+-    MissingAttribute,
++    MissingAttribute(Span),
+     Parse(syn::Error),
++}
++
++impl ParseTemplateSourceError {
++    pub fn into_compile_error_with_message(self, message: &str) -> TokenStream {
++        match self {
++            err @ Self::MissingAttribute(span) => {
++                syn::Error::new(span, format!("{err}: {message}"))
++            }
++            Self::Parse(err) => syn::Error::new(err.span(), format!("{err}: {message}")),
++        }
++        .into_compile_error()
++    }
+ }
+ 
+ impl std::fmt::Display for ParseTemplateSourceError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+-            Self::MissingAttribute => write!(f, "Missing 'template' attribute"),
++            Self::MissingAttribute(_) => write!(f, "Missing 'template' attribute"),
+             Self::Parse(err) => write!(f, "{}", err),
+         }
+     }
+@@ -62,7 +74,7 @@
+ impl std::error::Error for ParseTemplateSourceError {
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
+-            Self::MissingAttribute => None,
++            Self::MissingAttribute(_) => None,
+             Self::Parse(err) => Some(err),
+         }
+     }
+@@ -75,7 +87,7 @@
+         .attrs
+         .iter()
+         .find(|a| a.path().is_ident("template"))
+-        .ok_or(ParseTemplateSourceError::MissingAttribute)?
++        .ok_or(ParseTemplateSourceError::MissingAttribute(Span::call_site()))?
+         .parse_args()
+         .map_err(ParseTemplateSourceError::Parse)
+ }
+--- a/gtk3-macros/src/composite_template_derive.rs
++++ b/gtk3-macros/src/composite_template_derive.rs
+@@ -1,7 +1,6 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-use proc_macro2::TokenStream;
+-use proc_macro_error::{abort, abort_call_site};
++use proc_macro2::{Span, TokenStream};
+ use quote::quote;
+ use syn::Data;
+ 
+@@ -29,7 +28,7 @@
+     let crate_ident = crate_ident_new();
+     let attributed_fields = match parse_fields(fields) {
+         Ok(fields) => fields,
+-        Err(err) => abort!(err.span(), err.to_string()),
++        Err(err) => return err.into_compile_error(),
+     };
+ 
+     let recurse = attributed_fields.iter().map(|field| match field.attr.ty {
+@@ -62,9 +61,8 @@
+ 
+     let source = match parse_template_source(input) {
+         Ok(v) => v,
+-        Err(e) => abort_call_site!(
+-            "{}: derive(CompositeTemplate) requires #[template(...)] to specify 'file', 'resource', or 'string'",
+-            e
++        Err(e) => return e.into_compile_error_with_message(
++            "derive(CompositeTemplate) requires #[template(...)] to specify 'file', 'resource', or 'string'",
+         ),
+     };
+ 
+@@ -72,7 +70,13 @@
+ 
+     let fields = match input.data {
+         Data::Struct(ref s) => &s.fields,
+-        _ => abort_call_site!("derive(CompositeTemplate) only supports structs"),
++        _ => {
++            return syn::Error::new(
++                Span::call_site(),
++                "derive(CompositeTemplate) only supports structs",
++            )
++            .into_compile_error();
++        }
+     };
+ 
+     let template_children = gen_template_child_bindings(fields);
+--- a/gtk3-macros/src/lib.rs
++++ b/gtk3-macros/src/lib.rs
+@@ -5,7 +5,6 @@
+ mod util;
+ 
+ use proc_macro::TokenStream;
+-use proc_macro_error::proc_macro_error;
+ use syn::{parse_macro_input, DeriveInput};
+ 
+ /// Derive macro for using a composite template in a widget.
+@@ -81,7 +80,6 @@
+ /// # fn main() {}
+ /// ```
+ #[proc_macro_derive(CompositeTemplate, attributes(template, template_child))]
+-#[proc_macro_error]
+ pub fn composite_template_derive(input: TokenStream) -> TokenStream {
+     let input = parse_macro_input!(input as DeriveInput);
+     let gen = composite_template_derive::impl_composite_template(&input);
+--- /dev/null
++++ b/gtk3-macros/tests/diagnostics.rs
+@@ -0,0 +1,38 @@
++// Exercise actual macro expansion without initializing GTK or a display.
++
++#[test]
++fn invalid_templates_report_compiler_errors() {
++    let cases = trybuild2::TestCases::new();
++    let invalid = [
++        (
++            "missing_template",
++            "#[derive(gtk::CompositeTemplate)] struct Invalid; fn main() {}",
++            "Missing 'template' attribute: derive(CompositeTemplate) requires #[template(...)]",
++        ),
++        (
++            "malformed_template",
++            "#[derive(gtk::CompositeTemplate)] #[template(unknown = \"\")] struct Invalid; fn main() {}",
++            "derive(CompositeTemplate) requires #[template(...)]",
++        ),
++        (
++            "template_requires_struct",
++            "#[derive(gtk::CompositeTemplate)] #[template(string = \"\")] enum Invalid { Value } fn main() {}",
++            "derive(CompositeTemplate) only supports structs",
++        ),
++        (
++            "duplicate_template_child_id",
++            "#[derive(gtk::CompositeTemplate)] #[template(string = \"\")] struct Invalid { #[template_child(id = \"a\", id = \"b\")] child: gtk::subclass::widget::TemplateChild<gtk::Label> } fn main() {}",
++            "two instances of the same attribute argument, each argument must be specified only once",
++        ),
++    ];
++
++    for (name, source, message) in invalid {
++        cases.compile_fail_inline_check_sub(name, source, message);
++    }
++}
++
++#[test]
++fn valid_template_and_child_still_compile() {
++    let cases = trybuild2::TestCases::new();
++    cases.pass("tests/fixtures/valid-template.rs");
++}
+--- /dev/null
++++ b/gtk3-macros/tests/fixtures/backport-widget.ui
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <template class="BackportWidget" parent="GtkBox">
++    <child>
++      <object class="GtkLabel" id="label"/>
++    </child>
++  </template>
++</interface>
+--- /dev/null
++++ b/gtk3-macros/tests/fixtures/valid-template.rs
+@@ -0,0 +1,39 @@
++use gtk::{glib, prelude::InitializingWidgetExt, subclass::prelude::*};
++
++mod imp {
++    use super::*;
++
++    #[derive(Default, gtk::CompositeTemplate)]
++    #[template(file = "backport-widget.ui")]
++    pub struct BackportWidget {
++        #[template_child(id = "label")]
++        pub label: TemplateChild<gtk::Label>,
++    }
++
++    #[glib::object_subclass]
++    impl ObjectSubclass for BackportWidget {
++        const NAME: &'static str = "BackportWidget";
++        type Type = super::BackportWidget;
++        type ParentType = gtk::Box;
++
++        fn class_init(klass: &mut Self::Class) {
++            Self::bind_template(klass);
++        }
++
++        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
++            obj.init_template();
++        }
++    }
++
++    impl ObjectImpl for BackportWidget {}
++    impl WidgetImpl for BackportWidget {}
++    impl ContainerImpl for BackportWidget {}
++    impl BoxImpl for BackportWidget {}
++}
++
++glib::wrapper! {
++    pub struct BackportWidget(ObjectSubclass<imp::BackportWidget>)
++        @extends gtk::Widget, gtk::Container, gtk::Box;
++}
++
++fn main() {}

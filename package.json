@@ -1,28 +1,31 @@
 {
   "name": "filen-menubar",
   "private": true,
-  "version": "0.1.33",
+  "version": "0.1.34",
   "type": "module",
   "scripts": {
     "build:filen-cli": "bash scripts/build-filen-cli.sh",
     "precheck": "npm run build:filen-cli",
-    "check": "npm run check:version && npm run check:filen-cli && npm run check:fmt && npm run check:clippy && npm test && npm run test:arch && npm run test:workflows",
+    "check": "npm run check:version && npm run check:filen-cli && npm run check:rust-backports && npm run check:rust-audit && npm run check:fmt && npm run check:clippy && npm test && npm run test:arch && npm run test:workflows",
+    "check:rust-backports": "node --test scripts/audit-rust-backports.test.mjs && node scripts/check-rust-backports.mjs",
+    "check:rust-audit": "bash scripts/audit-rust.sh",
     "check:version": "bash scripts/check-version-sync.sh",
-    "check:filen-cli": "node --test scripts/license-evidence.test.mjs && bash scripts/check-filen-cli-version.sh && bash scripts/check-filen-cli-state-patch.sh && node scripts/validate-filen-cli-compliance.mjs",
+    "check:filen-cli": "node --test scripts/license-evidence.test.mjs scripts/audit-security-backports.test.mjs && bash scripts/check-filen-cli-version.sh && bash scripts/check-filen-cli-state-patch.sh && node scripts/validate-filen-cli-compliance.mjs",
     "check:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml",
     "check:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:arch": "bash packaging/arch/render_test.sh",
     "test:workflows": "bash scripts/workflow_security_test.sh",
+    "test:rust-backports": "bash scripts/test-rust-backports.sh",
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@cyclonedx/cyclonedx-library": "10.1.1",
-    "@tauri-apps/cli": "^2.11.4",
+    "@cyclonedx/cyclonedx-library": "10.3.0",
+    "@tauri-apps/cli": "^2.12.1",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "ajv-formats-draft2019": "1.6.1",
     "packageurl-js": "2.0.1",
-    "spdx-expression-parse": "4.0.0"
+    "spdx-expression-parse": "5.0.0"
   }
 }

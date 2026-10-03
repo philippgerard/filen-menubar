@@ -1,0 +1,51 @@
+--- a/glib/src/variant_iter.rs
++++ b/glib/src/variant_iter.rs
+@@ -117,13 +117,13 @@
+ 
+     fn impl_get(&self, i: usize) -> &'a str {
+         unsafe {
+-            let p: *mut libc::c_char = std::ptr::null_mut();
++            let mut p: *mut libc::c_char = std::ptr::null_mut();
+             let s = b"&s\0";
+             ffi::g_variant_get_child(
+                 self.variant.to_glib_none().0,
+                 i,
+                 s as *const u8 as *const _,
+-                &p,
++                &mut p,
+                 std::ptr::null::<i8>(),
+             );
+             let p = std::ffi::CStr::from_ptr(p);
+@@ -368,4 +368,31 @@
+         assert_eq!(iter.len(), 3);
+         assert_eq!(iter.last(), Some("2"));
+     }
+-}
++
++    // Run this with --release: the immutable out-pointer in RUSTSEC-2024-0429
++    // was miscompiled under optimization. Cover every path through impl_get.
++    #[test]
++    fn test_variant_str_iter_mutable_out_pointer() {
++        let strings = vec!["first", "λast", ""];
++        let variant = strings.to_variant();
++
++        assert_eq!(
++            variant.array_iter_str().unwrap().collect::<Vec<_>>(),
++            strings
++        );
++        assert_eq!(
++            variant.array_iter_str().unwrap().rev().collect::<Vec<_>>(),
++            vec!["", "λast", "first"]
++        );
++        assert_eq!(variant.array_iter_str().unwrap().nth(1), Some("λast"));
++        assert_eq!(variant.array_iter_str().unwrap().nth_back(1), Some("λast"));
++        assert_eq!(variant.array_iter_str().unwrap().last(), Some(""));
++
++        let mut mixed = variant.array_iter_str().unwrap();
++        assert_eq!(mixed.next(), Some("first"));
++        assert_eq!(mixed.next_back(), Some(""));
++        assert_eq!(mixed.next(), Some("λast"));
++        assert_eq!(mixed.next_back(), None);
++        assert_eq!(mixed.next(), None);
++    }
++}

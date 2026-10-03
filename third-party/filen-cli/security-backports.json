@@ -1,0 +1,19 @@
+[
+  {
+    "package": "braces",
+    "version": "3.0.3",
+    "advisory": "GHSA-vfj7-8cjw-p6xm",
+    "upstream": "https://github.com/micromatch/braces/pull/72",
+    "commit": "28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+    "treeSha256": "c71b882208d44aa9810b01e4ccd816ef8ba9da0f717a245eced16ac79660a575"
+  },
+  {
+    "package": "node-forge",
+    "version": "1.4.0",
+    "advisory": "GHSA-86w9-cpqp-85rv",
+    "upstream": "https://github.com/digitalbazaar/forge/pull/1152",
+    "commit": "ceba34402e329f0365134f23fe19898756527d65",
+    "additionalFix": "Require empty primitive NULL parameters",
+    "treeSha256": "f80019e40aa0631ab4cd1a0c038812c8b50a91c4c456168a04d48661574796dc"
+  }
+]
