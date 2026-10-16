@@ -4,8 +4,8 @@ set -euo pipefail
 readonly cli_commit="ca966d86d1fe3ed204088e448299d174288085f6"
 readonly bun_version="1.4.2"
 readonly bun_revision="1.4.2+744846f84"
-readonly node_version="24.21.0"
-readonly node_source_sha256="622424efb5dc0c26c93fbb619ff10737ee289c605b837c88778e186925d82777"
+readonly node_version="24.22.0"
+readonly node_source_sha256="9010e34b40beb69ee5eb8c0ee22e08da6a6c7bff16c6f8be7904638970a66c91"
 readonly keyring_commit="165e4334ff365792d9b1274761e8afeedcccaffe"
 readonly sync_commit="0d025bae60f493a42c2f49a4fcbbb46a31bea4ab"
 readonly sdk_commit="6f272ffac11802d5d1a64fb8796871b402db6a71"
@@ -60,14 +60,14 @@ case "$(uname -s):$(uname -m)" in
     Darwin:arm64)
         target_triple="aarch64-apple-darwin"
         node_platform="darwin-arm64"
-        node_archive_sha256="bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057"
+        node_archive_sha256="6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5"
         keyring_filename="node-keyring.darwin-arm64.node"
         keyring_library="libnode_keyring.dylib"
         ;;
     Linux:x86_64)
         target_triple="x86_64-unknown-linux-gnu"
         node_platform="linux-x64"
-        node_archive_sha256="6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
+        node_archive_sha256="28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c"
         keyring_filename="node-keyring.linux-x64-gnu.node"
         keyring_library="libnode_keyring.so"
         ;;

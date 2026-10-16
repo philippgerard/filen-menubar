@@ -34,7 +34,7 @@ for (const name of ["build.yml", "checks.yml"]) {
   assert.equal(hostCheck.if, "matrix.platform == 'macos-latest'", `${name}: native host check must cover the macOS build`)
   assert.equal(hostCheck["continue-on-error"], undefined, `${name}: native host check must fail the job`)
 
-  assert.equal(unconditional("Node.js setup", item => item.uses?.startsWith("actions/setup-node@")).with?.["node-version"], "24.21.0", `${name}: Node.js must use the pinned runtime`)
+  assert.equal(unconditional("Node.js setup", item => item.uses?.startsWith("actions/setup-node@")).with?.["node-version"], "24.22.0", `${name}: Node.js must use the pinned runtime`)
   assert.equal(unconditional("Bun setup", item => item.uses?.startsWith("oven-sh/setup-bun@")).with?.["bun-version"], "1.4.2", `${name}: Bun must use the pinned build tool`)
   unconditional("Bun revision check", item => item.run?.trim() === 'test "$(bun --revision)" = "1.4.2+744846f84"')
 
