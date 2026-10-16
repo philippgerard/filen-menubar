@@ -26,7 +26,7 @@ A lightweight, native menubar/system tray application for [Filen.io](https://fil
 No separate Filen CLI or Node.js runtime is required after installation. The
 app bundles `v0.0.39-menubar.2`: a focused build of classic CLI v0.0.39 with
 `@filen/sync` v0.3.7 and `@filen/sdk` v0.4.2. It runs on an app-owned copy of
-the official Node.js v24.21.0 runtime. Neither the helper nor this Node.js
+the official Node.js v24.22.0 runtime. Neither the helper nor this Node.js
 runtime is resolved from `PATH`: the runtime stays private to the application
 bundle on macOS and under `/usr/lib/Filen Menubar/filen-cli/` in Linux packages.
 

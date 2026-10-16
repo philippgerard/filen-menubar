@@ -14,12 +14,12 @@ This archive is the corresponding source for one platform build of the
 - the source trees for every npm package present in the esbuild runtime graph;
 - the braces and node-forge security patches, their pinned package checksums,
   upstream provenance, regression controls, and source-aware audit gate;
-- the official Node.js `v24.21.0` source archive, its license/notices, the
+- the official Node.js `v24.22.0` source archive, its license/notices, the
   runtime SBOM, and the patches and scripts used to produce the distribution.
 
 The preferred build hosts are macOS 13.5 or newer on Apple silicon and Linux
 x86_64 with glibc 2.34 or newer. Install Rust stable, npm, official Node.js
-`v24.21.0`, and Bun `1.4.2` revision `1.4.2+744846f84`. Linux also needs a C
+`v24.22.0`, and Bun `1.4.2` revision `1.4.2+744846f84`. Linux also needs a C
 toolchain, `pkg-config`, and D-Bus development headers.
 
 Run:

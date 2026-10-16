@@ -42,7 +42,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.21.0
+          node-version: 24.22.0
           cache: npm
 
       - name: Setup Bun
@@ -134,7 +134,7 @@ jobs:
           helper_version="$(tr -d '\r\n' < third-party/filen-cli/VERSION)"
           [[ -x "$helper_path" && -f "$runtime_path/filen-cli.cjs" && -f "$addon_path" ]]
           [[ "$(file -b "$helper_path")" == *"arm64"* ]]
-          [[ "$("$helper_path" --version)" == "v24.21.0" ]]
+          [[ "$("$helper_path" --version)" == "v24.22.0" ]]
           [[ "$(NO_COLOR=1 "$helper_path" --disable-warning=DEP0169 \
             "$runtime_path/filen-cli.cjs" --skip-update --data-dir "$RUNNER_TEMP/filen-data" --version)" == \
             "Filen CLI ${helper_version}" ]]

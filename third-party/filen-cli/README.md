@@ -20,7 +20,7 @@ Filen dependencies are distributed under AGPL-3.0-only.
 - Surface: self-update, filesystem utility, mount, WebDAV, and S3 commands are
   excluded from the runtime bundle because Filen Menubar invokes only login,
   version probing, and continuous sync
-- Runtime: official Node.js `v24.21.0` plus an esbuild CJS entrypoint. Bun
+- Runtime: official Node.js `v24.22.0` plus an esbuild CJS entrypoint. Bun
   `1.4.2+744846f84` is pinned as a build/test/package-lock tool only and is
   not distributed in the application
 - Keyring: `@jupiterpi/node-keyring` is rebuilt from source commit
@@ -71,7 +71,7 @@ the same security regressions and production audit gate before bundling.
 - Sync engine: <https://github.com/FilenCloudDienste/filen-sync/tree/v0.3.7>
 - SDK: <https://github.com/FilenCloudDienste/filen-sdk-ts/tree/v0.4.2>
 - Native keyring: <https://github.com/JupiterPi/node-keyring/tree/165e4334ff365792d9b1274761e8afeedcccaffe>
-- Node.js: <https://github.com/nodejs/node/tree/v24.21.0>
+- Node.js: <https://github.com/nodejs/node/tree/v24.22.0>
 
 `AGPL-3.0.txt` contains the helper license. The generated application payload
 also contains Node's complete license/notices, the actual runtime dependency
