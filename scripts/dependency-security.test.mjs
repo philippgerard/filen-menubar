@@ -27,7 +27,10 @@ test("relative reference normalization preserves its resolution target", () => {
 
 test("suffix paths without an authority cannot inject a scheme", () => {
   for (const input of ["javascript:alert(1)", "data:text/plain,test", "vbscript:test"]) {
-    const result = uri.serialize({ path: input }, { reference: "suffix" })
-    assert.equal(uri.parse(result).scheme, undefined)
+    // A suffix reference drops the scheme, so its first path segment must stay unparseable as one.
+    for (const component of [{ path: input }, { scheme: "https", path: input }]) {
+      const result = uri.serialize(component, { reference: "suffix" })
+      assert.equal(uri.parse(result).scheme, undefined)
+    }
   }
 })
