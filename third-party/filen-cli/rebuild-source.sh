@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly bun_version="1.4.2"
-readonly bun_revision="1.4.2+744846f84"
-readonly node_version="v24.22.0"
+readonly bun_version="1.4.4"
+readonly bun_revision="1.4.4+38afee6c8"
+readonly node_version="v24.22.2"
 
 source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 output_dir="${1:-${source_root}/rebuilt}"

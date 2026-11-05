@@ -44,6 +44,9 @@ export function checkSecurityBackports(sourceDir) {
   const forge = require("node-forge")
   const { asn1 } = forge
   const keys = forge.pki.rsa.generateKeyPair({ bits: 1024, e: 3 })
+  // Forge 1.4.1 briefly broke Buffer PEM input; retain the 1.4.2 compatibility fix.
+  const publicPem = forge.pki.publicKeyToPem(keys.publicKey)
+  assert.deepEqual(forge.pem.decode(Buffer.from(publicPem)), forge.pem.decode(publicPem))
   const node = (type, value, constructed = false) => asn1.create(asn1.Class.UNIVERSAL, type, constructed, value)
   const seq = value => node(asn1.Type.SEQUENCE, value, true)
   const nullParameter = () => node(asn1.Type.NULL, "")

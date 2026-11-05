@@ -5,11 +5,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { assessAudit, treeHash, verifyPatchedPackages } from "./audit-security-backports.mjs"
+import { assessAudit, treeHash, validateBackportManifest, verifyPatchedPackages } from "./audit-security-backports.mjs"
 
 const manifest = [
-  { package: "braces", version: "3.0.3", advisory: "GHSA-vfj7-8cjw-p6xm" },
-  { package: "node-forge", version: "1.4.0", advisory: "GHSA-86w9-cpqp-85rv" },
+  { package: "braces", version: "3.0.3", advisory: "GHSA-vfj7-8cjw-p6xm", treeSha256: "0".repeat(64) },
 ]
 const advisory = (id, severity = "high") => ({ url: `https://github.com/advisories/${id}`, severity, vulnerable_versions: "*" })
 
@@ -24,6 +23,27 @@ test("only exact package/advisory pairs qualify; other high and critical finding
 test("invalid audit output fails closed", () => {
   for (const report of [null, [], { braces: {} }, { braces: [{}] }, { braces: [advisory("x", "unknown")] }]) {
     assert.throws(() => assessAudit(report, manifest), /Invalid/)
+  }
+})
+
+test("retired forge backport does not exempt either high or critical findings", () => {
+  for (const severity of ["high", "critical"]) {
+    assert.throws(() => assessAudit({ "node-forge": [advisory("GHSA-86w9-cpqp-85rv", severity)] }, manifest), /Unpatched/)
+  }
+})
+
+test("only one exact braces identity with a valid checksum can authorize a backport", () => {
+  validateBackportManifest(manifest)
+  const invalid = [null, {}, [], [null], [manifest[0], manifest[0]]]
+  for (const change of [
+    { package: "node-forge", version: "1.4.0", advisory: "GHSA-86w9-cpqp-85rv" },
+    { package: "other" }, { version: "3.0.4" }, { advisory: "GHSA-new-advisory" },
+    { treeSha256: undefined }, { treeSha256: 1 }, { treeSha256: "0".repeat(63) }, { treeSha256: "g".repeat(64) },
+  ]) invalid.push([{ ...manifest[0], ...change }])
+  for (const candidate of invalid) {
+    assert.throws(() => validateBackportManifest(candidate), /Invalid security backport manifest/)
+    assert.throws(() => assessAudit({}, candidate), /Invalid security backport manifest/)
+    assert.throws(() => verifyPatchedPackages("unused", candidate), /Invalid security backport manifest/)
   }
 })
 
@@ -46,6 +66,11 @@ test("all installed copies must have exact source bytes and version", t => {
   fs.appendFileSync(path.join(nested, "index.js"), "changed")
   assert.throws(() => verifyPatchedPackages(root, fixture), /Unverified/)
   fs.rmSync(nested, { recursive: true })
+  const metadata = path.join(root, "node_modules", "braces", "package.json")
+  fs.writeFileSync(metadata, JSON.stringify({ name: "braces", version: "3.0.4" }))
+  const changedVersion = [{ ...fixture[0], treeSha256: treeHash(path.dirname(metadata)) }]
+  assert.throws(() => verifyPatchedPackages(root, changedVersion), /Unverified/)
+  fs.writeFileSync(metadata, JSON.stringify({ name: "braces", version: "3.0.3" }))
   fs.symlinkSync("index.js", path.join(root, "node_modules", "braces", "unexpected-link"))
   assert.throws(() => verifyPatchedPackages(root, fixture), /Unsupported/)
 })

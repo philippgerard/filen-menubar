@@ -135,8 +135,8 @@ build_app() {
         exit 1
     fi
 
-    if ! command -v bun &>/dev/null || [ "$(bun --version)" != "1.4.2" ]; then
-        print_error "Bun 1.4.2 is required to build the bundled Filen CLI."
+    if ! command -v bun &>/dev/null || [ "$(bun --version)" != "1.4.4" ]; then
+        print_error "Bun 1.4.4 is required to build the bundled Filen CLI."
         print_warning "Install that exact version from https://bun.sh before continuing."
         exit 1
     fi

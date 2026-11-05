@@ -35,6 +35,22 @@ test("malformed audit reports and ignored advisories fail closed", () => {
   }
 })
 
+test("only exact pending ksni maintenance notices qualify, never vulnerabilities", () => {
+  for (const [name, version, id] of [["zvariant", "5.15.1", "RUSTSEC-2026-0370"], ["zbus_names", "4.3.5", "RUSTSEC-2026-0371"], ["zvariant_derive", "5.15.1", "RUSTSEC-2026-0372"]]) {
+    const notice = { advisory: { id, package: name }, package: { name, version } }
+    assert.match(assessRustAudit(report({ unmaintained: [notice] }))[0], /UNRESOLVED maintenance/)
+    for (const warnings of [
+      { unsound: [notice] }, { notice: [notice] },
+      { unmaintained: [{ ...notice, package: { name, version: "99.0.0" } }] },
+      { unmaintained: [{ ...notice, advisory: { id: "RUSTSEC-FUTURE", package: name } }] },
+      { unmaintained: [{ ...notice, advisory: { id, package: "other" } }] },
+    ]) assert.throws(() => assessRustAudit(report(warnings)), /Unpatched/)
+    const vulnerability = report({})
+    vulnerability.vulnerabilities = { found: true, count: 1, list: [notice] }
+    assert.throws(() => assessRustAudit(vulnerability), /Unpatched/)
+  }
+})
+
 test("the audit fails closed when invoked through a symlinked checkout", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rust-audit-gate-"))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

@@ -22,8 +22,20 @@ export function treeHash(directory) {
   return hash.digest("hex")
 }
 
+export function validateBackportManifest(manifest) {
+  // Only the retained braces patch may exempt an advisory. In particular,
+  // released node-forge fixes must never inherit the retired backport waiver.
+  if (!Array.isArray(manifest) || manifest.length !== 1 ||
+      manifest[0]?.package !== "braces" || manifest[0]?.version !== "3.0.3" ||
+      manifest[0]?.advisory !== "GHSA-vfj7-8cjw-p6xm" ||
+      typeof manifest[0]?.treeSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(manifest[0].treeSha256)) {
+    throw new Error("Invalid security backport manifest")
+  }
+}
+
 export function verifyPatchedPackages(sourceDir, manifest) {
-  if (!Array.isArray(manifest) || manifest.length !== 2) throw new Error("Invalid security backport manifest")
+  validateBackportManifest(manifest)
   const found = new Set()
   const visitModules = directory => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -53,6 +65,7 @@ export function verifyPatchedPackages(sourceDir, manifest) {
 }
 
 export function assessAudit(report, manifest) {
+  validateBackportManifest(manifest)
   if (!report || typeof report !== "object" || Array.isArray(report)) throw new Error("Invalid Bun audit response")
   const results = []
   for (const [name, advisories] of Object.entries(report)) {

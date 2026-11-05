@@ -56,14 +56,14 @@ tasks:
     command: |
       set -euo pipefail
       curl -fsSL https://bun.sh/install |
-        BUN_INSTALL="$HOME/.local" bash -s 'bun-v1.4.2'
+        BUN_INSTALL="$HOME/.local" bash -s 'bun-v1.4.4'
     needs:
       - system_dependencies
     run_once:
       check: >-
         test -x "$HOME/.local/bin/bun" &&
-        test "$("$HOME/.local/bin/bun" --version)" = '1.4.2' &&
-        test "$("$HOME/.local/bin/bun" --revision)" = '1.4.2+744846f84'
+        test "$("$HOME/.local/bin/bun" --version)" = '1.4.4' &&
+        test "$("$HOME/.local/bin/bun" --revision)" = '1.4.4+38afee6c8'
 
   node_dependencies:
     command: |

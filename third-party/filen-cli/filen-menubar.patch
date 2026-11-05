@@ -1,12 +1,12 @@
 diff --git a/package.json b/package.json
-index 70f69e3..5fbb9c1 100644
+index 70f69e3..7468cf1 100644
 --- a/package.json
 +++ b/package.json
 @@ -3,6 +3,7 @@
    "version": "0.0.0",
    "description": "Filen CLI",
    "main": "build/index.js",
-+  "packageManager": "bun@1.4.2",
++  "packageManager": "bun@1.4.4",
    "type": "module",
    "scripts": {
      "start": "bun run src/index.ts",
@@ -19,7 +19,7 @@ index 70f69e3..5fbb9c1 100644
    },
    "keywords": [
      "filen"
-@@ -28,45 +29,54 @@
+@@ -28,45 +29,53 @@
    "author": "Filen",
    "license": "AGPLv3",
    "dependencies": {
@@ -47,9 +47,9 @@ index 70f69e3..5fbb9c1 100644
 +  "overrides": {
 +    "axios": "1.20.0",
 +    "elliptic": "6.6.1",
-+    "follow-redirects": "1.16.0",
++    "follow-redirects": "1.16.2",
 +    "form-data": "4.0.6",
-+    "node-forge": "1.4.0"
++    "node-forge": "1.4.3"
    },
    "devDependencies": {
      "@eslint/eslintrc": "^3.3.1",
@@ -87,7 +87,6 @@ index 70f69e3..5fbb9c1 100644
 -    "@jupiterpi/node-keyring@0.1.1": "patches/@jupiterpi%2Fnode-keyring@0.1.1.patch",
 -    "@parcel/watcher@2.5.1": "patches/@parcel%2Fwatcher@2.5.1.patch"
 +    "braces@3.0.3": "patches/braces@3.0.3.patch",
-+    "node-forge@1.4.0": "patches/node-forge@1.4.0.patch",
 +    "@filen/sync@0.3.7": "patches/@filen%2Fsync@0.3.7.patch",
 +    "@jupiterpi/node-keyring@0.1.1": "patches/@jupiterpi%2Fnode-keyring@0.1.1.patch"
    }

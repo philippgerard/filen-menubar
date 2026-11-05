@@ -5,6 +5,15 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
+// ksni 0.3 still requires zbus 5. Its zbus 6 migration is unreleased:
+// https://github.com/iovxw/ksni/pull/48. These are maintenance notices, not
+// patched vulnerabilities; keep them visible and reject any changed identity.
+const pendingMaintenance = new Map([
+  ["zvariant", ["5.15.1", "RUSTSEC-2026-0370"]],
+  ["zbus_names", ["4.3.5", "RUSTSEC-2026-0371"]],
+  ["zvariant_derive", ["5.15.1", "RUSTSEC-2026-0372"]],
+])
+
 // cargo-audit skips path dependencies. Restore their original registry identity
 // in a disposable audit input, while retaining the application's actual graph.
 export function registryAuditLock(lock, records) {
@@ -36,8 +45,12 @@ export function assessRustAudit(report) {
     assert.ok(Array.isArray(warnings), "Invalid Rust warning entries")
     for (const warning of warnings) {
       const fixed = kind === "unsound" && warning.advisory?.id === "RUSTSEC-2024-0429" && warning.advisory?.package === "glib" && warning.package?.name === "glib" && warning.package?.version === "0.18.5"
-      assert.ok(fixed, `Unpatched Rust warning: ${warning.advisory?.id ?? kind}`)
-      verified.push("glib@0.18.5: RUSTSEC-2024-0429 (verified source backport)")
+      const pending = pendingMaintenance.get(warning.package?.name)
+      const maintenance = kind === "unmaintained" && pending && warning.advisory?.package === warning.package.name && warning.package.version === pending[0] && warning.advisory?.id === pending[1]
+      assert.ok(fixed || maintenance, `Unpatched Rust warning: ${warning.advisory?.id ?? kind}`)
+      verified.push(fixed
+        ? "glib@0.18.5: RUSTSEC-2024-0429 (verified source backport)"
+        : `${warning.package.name}@${warning.package.version}: ${warning.advisory.id} (UNRESOLVED maintenance notice; awaiting ksni zbus 6 migration)`)
     }
   }
   return verified
@@ -54,7 +67,7 @@ function auditRustBackports(repo, auditBin) {
     const result = spawnSync(auditBin, ["audit", "--file", filename, "--json", "--deny", "warnings"], { encoding: "utf8", timeout: 120000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } })
     if (result.error || ![0, 1].includes(result.status)) throw new Error(`Rust audit failed: ${result.error?.message ?? result.stderr}`)
     const lines = assessRustAudit(JSON.parse(result.stdout))
-    if (result.status === 1 && lines.length === 0) throw new Error("Rust audit failed without a verified backport finding")
+    if (result.status === 1 && lines.length === 0) throw new Error("Rust audit failed without a reviewed finding")
     for (const line of lines) console.log(line)
     console.log("Rust audit passed, including registry advisories for all vendored crates")
   } finally {
