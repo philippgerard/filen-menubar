@@ -2,8 +2,8 @@
 set -euo pipefail
 
 readonly cli_commit="ca966d86d1fe3ed204088e448299d174288085f6"
-readonly bun_version="1.4.2"
-readonly bun_revision="1.4.2+744846f84"
+readonly bun_version="1.4.4"
+readonly bun_revision="1.4.4+38afee6c8"
 readonly node_version="24.22.2"
 readonly node_source_sha256="b2f5443a34a38d863e87c0f5f80c03630fc16917dfe16f26c1cec44c0b542959"
 readonly keyring_commit="165e4334ff365792d9b1274761e8afeedcccaffe"

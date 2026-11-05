@@ -21,8 +21,10 @@ Filen dependencies are distributed under AGPL-3.0-only.
   excluded from the runtime bundle because Filen Menubar invokes only login,
   version probing, and continuous sync
 - Runtime: official Node.js `v24.22.2` plus an esbuild CJS entrypoint. Bun
-  `1.4.2+744846f84` is pinned as a build/test/package-lock tool only and is
+  `1.4.4+38afee6c8` is pinned as a build/test/package-lock tool only and is
   not distributed in the application
+  (1.4.4 fixes the build tool's Brotli decoder and compromised eMudhra CA trust,
+  including package downloads; GHSA-663w-cv8g-jj2p and GHSA-26q8-h657-pf84)
 - Keyring: `@jupiterpi/node-keyring` is rebuilt from source commit
   `165e4334ff365792d9b1274761e8afeedcccaffe` with the checked-in Cargo lock.
   This avoids the published Linux binary's newer-glibc symbol requirement.

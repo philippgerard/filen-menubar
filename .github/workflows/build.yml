@@ -76,10 +76,10 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Verify Bun revision
-        run: test "$(bun --revision)" = "1.4.2+744846f84"
+        run: test "$(bun --revision)" = "1.4.4+38afee6c8"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable

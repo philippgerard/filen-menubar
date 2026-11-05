@@ -55,7 +55,7 @@ first patched run therefore performs a full tree scan.
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [Node.js](https://nodejs.org/) (v22+; Node 24 LTS recommended)
-- [Bun](https://bun.sh/) v1.4.2 (exact version, build and test tool only)
+- [Bun](https://bun.sh/) v1.4.4 (exact version, build and test tool only)
 - [Tauri CLI](https://tauri.app/)
 
 **macOS:**
@@ -180,7 +180,7 @@ Or build manually:
 sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl libxdo \
   libappindicator-gtk3 librsvg nodejs npm rust
 
-# Install Bun v1.4.2, then clone and build
+# Install Bun v1.4.4, then clone and build
 git clone https://github.com/philippgerard/filen-menubar.git
 cd filen-menubar
 npm ci
@@ -190,7 +190,7 @@ npm run tauri build
 # Binary will be in src-tauri/target/release/filen-menubar
 ```
 
-The build fails closed if Bun is missing or is not exactly v1.4.2.
+The build fails closed if Bun is missing or is not exactly v1.4.4.
 
 > **Note:** AppImage is not supported because its sandboxing prevents reliable
 > access to the bundled sync-backend resources.
