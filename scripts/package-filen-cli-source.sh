@@ -76,7 +76,7 @@ install -m 0644 "${repo_root}/third-party/filen-cli/filen-sdk-socket-error.patch
     "${staging}/${archive_root}/packaging/filen-sdk-socket-error.patch"
 install -m 0644 "${repo_root}/third-party/filen-cli/bun.lock" \
     "${staging}/${archive_root}/packaging/bun.lock"
-for file in braces@3.0.3.patch node-forge@1.4.0.patch security-backports.json; do
+for file in braces@3.0.3.patch security-backports.json; do
     install -m 0644 "${repo_root}/third-party/filen-cli/${file}" \
         "${staging}/${archive_root}/packaging/${file}"
 done

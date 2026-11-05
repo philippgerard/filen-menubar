@@ -4,8 +4,8 @@ set -euo pipefail
 readonly cli_commit="ca966d86d1fe3ed204088e448299d174288085f6"
 readonly bun_version="1.4.2"
 readonly bun_revision="1.4.2+744846f84"
-readonly node_version="24.22.0"
-readonly node_source_sha256="9010e34b40beb69ee5eb8c0ee22e08da6a6c7bff16c6f8be7904638970a66c91"
+readonly node_version="24.22.2"
+readonly node_source_sha256="b2f5443a34a38d863e87c0f5f80c03630fc16917dfe16f26c1cec44c0b542959"
 readonly keyring_commit="165e4334ff365792d9b1274761e8afeedcccaffe"
 readonly sync_commit="0d025bae60f493a42c2f49a4fcbbb46a31bea4ab"
 readonly sdk_commit="6f272ffac11802d5d1a64fb8796871b402db6a71"
@@ -18,7 +18,6 @@ sync_patch_file="${third_party_dir}/filen-sync-state-v3.patch"
 sync_source_patch_file="${third_party_dir}/filen-sync-source-state-v3.patch"
 sdk_socket_patch_file="${third_party_dir}/filen-sdk-socket-error.patch"
 braces_patch_file="${third_party_dir}/braces@3.0.3.patch"
-forge_patch_file="${third_party_dir}/node-forge@1.4.0.patch"
 security_manifest="${third_party_dir}/security-backports.json"
 lock_file="${third_party_dir}/bun.lock"
 keyring_lock_file="${third_party_dir}/node-keyring-Cargo.lock"
@@ -60,14 +59,14 @@ case "$(uname -s):$(uname -m)" in
     Darwin:arm64)
         target_triple="aarch64-apple-darwin"
         node_platform="darwin-arm64"
-        node_archive_sha256="6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5"
+        node_archive_sha256="aa9549349e47dffaa42dcf95d6e06ade8c4bdafc980979883b88767670df385a"
         keyring_filename="node-keyring.darwin-arm64.node"
         keyring_library="libnode_keyring.dylib"
         ;;
     Linux:x86_64)
         target_triple="x86_64-unknown-linux-gnu"
         node_platform="linux-x64"
-        node_archive_sha256="28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c"
+        node_archive_sha256="361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9"
         keyring_filename="node-keyring.linux-x64-gnu.node"
         keyring_library="libnode_keyring.so"
         ;;
@@ -118,7 +117,7 @@ if [[ ! "$cli_version_display" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-menubar\.[0-9]+$ ]]; 
 fi
 
 fingerprint="${cli_commit}:${cli_version_display}:${bun_revision}:node-${node_version}:${node_archive_sha256}:${node_source_sha256}:${keyring_commit}:${target_triple}:${sync_commit}:${sdk_commit}:$(hash_file "$version_file"):$(hash_file "$patch_file"):$(hash_file "$sync_patch_file"):$(hash_file "$sync_source_patch_file"):$(hash_file "$sdk_socket_patch_file"):$(hash_file "$lock_file"):$(hash_file "$keyring_lock_file"):$(hash_file "$keyring_license_supplements"):$(hash_file "${third_party_dir}/license-supplements/napi-rs-LICENSE.txt"):$(hash_file "${third_party_dir}/license-supplements/r-efi-AUTHORS.txt"):$(hash_file "${repo_root}/scripts/check-filen-sdk-socket-error.mjs"):$(hash_file "${repo_root}/scripts/license-evidence.mjs"):$(hash_file "${repo_root}/scripts/license-evidence.test.mjs"):$(hash_file "${repo_root}/scripts/generate-filen-cli-compliance.mjs"):$(hash_file "${repo_root}/scripts/generate-keyring-compliance.mjs"):$(hash_file "${repo_root}/scripts/validate-filen-cli-compliance.mjs"):$(hash_file "${repo_root}/scripts/audit-keyring.sh"):$(hash_file "${BASH_SOURCE[0]}")"
-fingerprint="${fingerprint}:$(hash_file "$braces_patch_file"):$(hash_file "$forge_patch_file"):$(hash_file "$security_manifest"):$(hash_file "${repo_root}/scripts/check-security-backports.mjs"):$(hash_file "${repo_root}/scripts/audit-security-backports.mjs")"
+fingerprint="${fingerprint}:$(hash_file "$braces_patch_file"):$(hash_file "$security_manifest"):$(hash_file "${repo_root}/scripts/check-security-backports.mjs"):$(hash_file "${repo_root}/scripts/audit-security-backports.mjs")"
 sidecar_file="${generated_dir}/filen-cli-node"
 if [[ -x "$sidecar_file" && -f "${runtime_dir}/filen-cli.cjs" && -f "$stamp_file" ]] &&
     [[ "$(<"$stamp_file")" == "$fingerprint" ]]; then
@@ -176,7 +175,6 @@ if [[ "$source_commit" != "$cli_commit" ]]; then
     GIT_CONFIG_GLOBAL=/dev/null git -C "$source_dir" apply "$patch_file"
     install -m 0644 "$sync_patch_file" "${source_dir}/patches/@filen%2Fsync@0.3.7.patch"
     install -m 0644 "$braces_patch_file" "${source_dir}/patches/braces@3.0.3.patch"
-    install -m 0644 "$forge_patch_file" "${source_dir}/patches/node-forge@1.4.0.patch"
     install -m 0644 "$security_manifest" "${source_dir}/patches/security-backports.json"
     install -m 0644 "$lock_file" "${source_dir}/bun.lock"
 fi

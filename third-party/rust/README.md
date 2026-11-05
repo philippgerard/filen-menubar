@@ -60,9 +60,24 @@ the remaining GTK3 stack has regained upstream maintenance.
 in a disposable audit-only lockfile, preserving the application's actual
 dependency graph. This keeps future registry advisories visible even though
 Cargo builds local sources. The gate first verifies every source checksum and
-the application's patch selections, then accepts only the exact GLib
-0.18.5/RUSTSEC-2024-0429 unsoundness warning. All other vulnerabilities and
-warnings, ignored advisories, malformed reports, and audit failures are fatal.
+the application's patch selections, then accepts the exact GLib
+0.18.5/RUSTSEC-2024-0429 unsoundness warning as a verified backport.
+It also prints three unresolved maintenance notices for the Linux tray's
+`ksni` → `zbus` 5 dependency chain: `zvariant` 5.15.1
+([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)),
+`zbus_names` 4.3.5
+([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)), and
+`zvariant_derive` 5.15.1
+([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)).
+These crates were folded into zbus 6; ksni's migration is
+[still unreleased](https://github.com/iovxw/ksni/pull/48). The gate recognizes
+only these exact package/version/advisory triples as `unmaintained` notices;
+it does not classify them as fixed or accept vulnerabilities for them.
+The keyring lock also retains older optional zbus 4 entries, but neither
+supported platform's selected keyring features compile those crates: Linux
+uses `dbus-secret-service`, and macOS uses `security-framework`.
+All other vulnerabilities and warnings, ignored advisories, malformed reports,
+and audit failures are fatal.
 The application lockfile and package versions are never changed by the gate.
 
 ## Verification
