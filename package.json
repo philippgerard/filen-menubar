@@ -7,7 +7,7 @@
     "build:filen-cli": "bash scripts/build-filen-cli.sh",
     "precheck": "npm run build:filen-cli",
     "check": "npm run check:version && npm run check:npm-audit && npm run check:filen-cli && npm run check:rust-backports && npm run check:rust-audit && npm run check:fmt && npm run check:clippy && npm test && npm run test:arch && npm run test:workflows",
-    "check:npm-audit": "npm audit --audit-level=low",
+    "check:npm-audit": "npm audit --audit-level=high",
     "check:rust-backports": "node --test scripts/audit-rust-backports.test.mjs && node scripts/check-rust-backports.mjs",
     "check:rust-audit": "bash scripts/audit-rust.sh",
     "check:version": "bash scripts/check-version-sync.sh",
