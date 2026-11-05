@@ -55,8 +55,8 @@ pair, after every installed copy passes the pinned whole-package checksum and
 the malicious-input and legitimate-behavior regressions. The manifest gate
 rejects missing, duplicate or unexpected identities and invalid checksums.
 Unexpected source, missing copies, malformed audit output, audit transport
-failure, and any other high/critical advisory fail the build. Upgrade to released
-upstream fixes and remove these patches when compatible releases become available.
+failure, and any other high/critical advisory fail the build. Upgrade to a released
+upstream fix and remove this patch when a compatible release becomes available.
 
 The remaining production audit finding is the low-severity
 [elliptic ECDSA signing advisory](https://github.com/advisories/GHSA-848j-6mx2-7j84);
