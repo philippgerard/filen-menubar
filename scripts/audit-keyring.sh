@@ -13,5 +13,8 @@ if [[ ! -x "$audit_bin" ]]; then
         --root "$tool_root"
 fi
 [[ "$($audit_bin --version)" == "cargo-audit ${audit_version}" ]]
+# Memory-unsoundness advisories must fail the build even when RustSec marks
+# them informational. Keep upstream maintenance notices visible separately.
 GIT_CONFIG_GLOBAL=/dev/null "$audit_bin" audit \
-    --file "${repo_root}/third-party/filen-cli/node-keyring-Cargo.lock"
+    --file "${repo_root}/third-party/filen-cli/node-keyring-Cargo.lock" \
+    --deny unsound

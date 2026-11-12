@@ -1,7 +1,7 @@
 {
   "name": "filen-menubar",
   "private": true,
-  "version": "0.1.36",
+  "version": "0.1.37",
   "type": "module",
   "scripts": {
     "build:filen-cli": "bash scripts/build-filen-cli.sh",
