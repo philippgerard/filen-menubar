@@ -91,6 +91,34 @@ Node.js runtime used by the sync backend.
 
 ## Installation
 
+### macOS (Homebrew)
+
+Install the signed and notarized Apple Silicon application from the
+[Homebrew tap](https://github.com/philippgerard/homebrew-tap):
+
+```bash
+brew install --cask philippgerard/tap/filen-menubar
+```
+
+The cask includes the patched sync backend and its private Node runtime. It
+requires macOS 13.5 or newer. Homebrew 6 and newer trust only this cask when
+installed using the fully qualified name above.
+
+Quit Filen Menubar before upgrading, then reopen it:
+
+```bash
+brew update
+brew upgrade --cask filen-menubar
+open -a 'Filen Menubar'
+```
+
+If another tool manages the app's launch agent, stop that agent before the
+upgrade and restart it afterward. Before migrating a manually installed app,
+quit it and move its existing `/Applications/Filen Menubar.app` bundle to a
+backup location so Homebrew can install its own copy. Keep your configuration,
+login state, and synced files. Nix/Home Manager installations also need their
+launcher migrated to the Homebrew-owned bundle; see the tap's migration notes.
+
 ### Pre-built Binaries
 
 Download the latest release from the [Releases](https://github.com/philippgerard/filen-menubar/releases) page:
