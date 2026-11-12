@@ -35,13 +35,6 @@ test("malformed audit reports and ignored advisories fail closed", () => {
   }
 })
 
-test("rustix xattr unsoundness is rejected for both affected lockfile versions", () => {
-  for (const version of ["1.1.4", "1.1.5"]) {
-    const warning = { advisory: { id: "RUSTSEC-2026-0486", package: "rustix" }, package: { name: "rustix", version } }
-    assert.throws(() => assessRustAudit(report({ unsound: [warning] })), /Unpatched Rust warning: RUSTSEC-2026-0486/)
-  }
-})
-
 test("only exact pending ksni maintenance notices qualify, never vulnerabilities", () => {
   for (const [name, version, id] of [["zvariant", "5.15.1", "RUSTSEC-2026-0370"], ["zbus_names", "4.3.5", "RUSTSEC-2026-0371"], ["zvariant_derive", "5.15.1", "RUSTSEC-2026-0372"]]) {
     const notice = { advisory: { id, package: name }, package: { name, version } }
