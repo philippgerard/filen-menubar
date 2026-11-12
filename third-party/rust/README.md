@@ -76,8 +76,10 @@ it does not classify them as fixed or accept vulnerabilities for them.
 The keyring lock also retains older optional zbus 4 entries, but neither
 supported platform's selected keyring features compile those crates: Linux
 uses `dbus-secret-service`, and macOS uses `security-framework`.
-All other vulnerabilities and warnings, ignored advisories, malformed reports,
-and audit failures are fatal.
+The keyring audit prints its maintenance notices for those entries and fails on
+any vulnerability or unsoundness warning.
+For the application lock, all other vulnerabilities and warnings, ignored
+advisories, malformed reports, and audit failures are fatal.
 The application lockfile and package versions are never changed by the gate.
 
 ## Verification
