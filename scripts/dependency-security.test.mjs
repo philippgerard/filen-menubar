@@ -1,6 +1,28 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { test } from "node:test"
+import { fileURLToPath } from "node:url"
 import uri from "fast-uri"
+
+test("HTTPS sessions cannot share a cache key across different CA policies", () => {
+  // Exercise the shipped interpreter, independently of the development host.
+  const runtime = fileURLToPath(new URL("../src-tauri/generated/filen-cli-node", import.meta.url))
+  const result = spawnSync(runtime, ["--input-type=module", "-e", `
+    import assert from "node:assert/strict"
+    import https from "node:https"
+    const agent = new https.Agent()
+    const options = { host: "example.com", port: 443 }
+    // CVE-2026-123877: ca: [] must not resume a default-trust-store session.
+    const defaultPolicy = agent.getName(options)
+    const emptyPolicy = agent.getName({ ...options, ca: [] })
+    assert.notEqual(emptyPolicy, defaultPolicy)
+    assert.equal(agent.getName({ ...options }), defaultPolicy)
+    assert.equal(agent.getName({ ...options, ca: [] }), emptyPolicy)
+    assert.notEqual(agent.getName({ ...options, ca: ["custom CA"] }), emptyPolicy)
+  `], { encoding: "utf8", timeout: 5000 })
+  assert.ifError(result.error)
+  assert.equal(result.status, 0, result.stderr)
+})
 
 test("encoded URI schemes never become executable schemes", () => {
   for (const input of ["%6Aavascript:alert(1)", "%u006Aavascript:alert(1)"]) {

@@ -15,12 +15,12 @@ This archive is the corresponding source for one platform build of the
 - the retained braces backport and its pinned package checksum,
   upstream provenance, regression controls, and source-aware audit gate;
 - the released node-forge fixes and RSA, PEM, and OAEP regression controls;
-- the official Node.js `v24.22.2` source archive, its license/notices, the
+- the official Node.js `v24.22.3` source archive, its license/notices, the
   runtime SBOM, and the patches and scripts used to produce the distribution.
 
 The preferred build hosts are macOS 13.5 or newer on Apple silicon and Linux
 x86_64 with glibc 2.34 or newer. Install Rust stable, npm, official Node.js
-`v24.22.2`, and Bun `1.4.4` revision `1.4.4+38afee6c8`. Linux also needs a C
+`v24.22.3`, and Bun `1.4.4` revision `1.4.4+38afee6c8`. Linux also needs a C
 toolchain, `pkg-config`, and D-Bus development headers.
 
 Run:

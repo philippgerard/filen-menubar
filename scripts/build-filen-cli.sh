@@ -4,8 +4,8 @@ set -euo pipefail
 readonly cli_commit="ca966d86d1fe3ed204088e448299d174288085f6"
 readonly bun_version="1.4.4"
 readonly bun_revision="1.4.4+38afee6c8"
-readonly node_version="24.22.2"
-readonly node_source_sha256="b2f5443a34a38d863e87c0f5f80c03630fc16917dfe16f26c1cec44c0b542959"
+readonly node_version="24.22.3"
+readonly node_source_sha256="4690edccae352134bbe31d844b37898f2a28b2c3d67901d0112fb6c4996d556a"
 readonly keyring_commit="165e4334ff365792d9b1274761e8afeedcccaffe"
 readonly sync_commit="0d025bae60f493a42c2f49a4fcbbb46a31bea4ab"
 readonly sdk_commit="6f272ffac11802d5d1a64fb8796871b402db6a71"
@@ -59,14 +59,14 @@ case "$(uname -s):$(uname -m)" in
     Darwin:arm64)
         target_triple="aarch64-apple-darwin"
         node_platform="darwin-arm64"
-        node_archive_sha256="aa9549349e47dffaa42dcf95d6e06ade8c4bdafc980979883b88767670df385a"
+        node_archive_sha256="ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd"
         keyring_filename="node-keyring.darwin-arm64.node"
         keyring_library="libnode_keyring.dylib"
         ;;
     Linux:x86_64)
         target_triple="x86_64-unknown-linux-gnu"
         node_platform="linux-x64"
-        node_archive_sha256="361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9"
+        node_archive_sha256="061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2"
         keyring_filename="node-keyring.linux-x64-gnu.node"
         keyring_library="libnode_keyring.so"
         ;;
@@ -258,7 +258,7 @@ cp -R "${sdk_source_dir}/dist" "${source_dir}/node_modules/@filen/sdk/dist"
         --metafile=dist/filen-cli.meta.json
 )
 install -m 0644 "$keyring_lock_file" "${keyring_source_dir}/Cargo.lock"
-[[ "$(hash_file "${keyring_source_dir}/Cargo.lock")" == "8156ea37b77d183209a23f52e857ee5c81a08d1f746fe059fa04fa479d005f7d" ]]
+[[ "$(hash_file "${keyring_source_dir}/Cargo.lock")" == "439eb2571ec70c037ff2a4522a8ae7143c0a8ec617cc4970e8ff94c7d1a3d491" ]]
 
 keyring_target_dir="${build_root}/keyring-target"
 (
