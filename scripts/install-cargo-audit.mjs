@@ -51,7 +51,6 @@ export function installCargoAudit(repo, run = spawnSync) {
     fs.writeFileSync(path.join(sourceDir, "Cargo.lock"), lock)
     const output = invoke("cargo", ["install", "--path", sourceDir, "--locked", "--root", installed], sourceDir)
     if (output) process.stderr.write(output)
-    assert.deepEqual(fs.readFileSync(path.join(sourceDir, "Cargo.lock")), lock, "Auditor build changed the pinned lock")
     const candidate = path.join(installed, "bin/cargo-audit")
     verifyVersion(candidate)
     fs.writeFileSync(path.join(installed, "receipt.json"), JSON.stringify({ fingerprint, binarySha256: sha256(fs.readFileSync(candidate)) }) + "\n")

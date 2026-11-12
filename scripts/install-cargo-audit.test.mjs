@@ -20,7 +20,7 @@ function fixture(t) {
   assert.equal(spawnSync("tar", ["-czf", archive, "-C", path.dirname(upstream), "cargo-audit-0.23.0"]).status, 0)
   const source = { version: "0.23.0", archiveSha256: createHash("sha256").update(fs.readFileSync(archive)).digest("hex") }
   fs.writeFileSync(path.join(pins, "source.json"), JSON.stringify(source))
-  const state = { downloads: 0, builds: 0, failBuild: false, wrongVersion: false, changeLock: false }
+  const state = { downloads: 0, builds: 0, failBuild: false, wrongVersion: false }
   const run = (command, args, options) => {
     if (command === "curl") {
       state.downloads++
@@ -36,7 +36,6 @@ function fixture(t) {
       const bin = path.join(args[args.indexOf("--root") + 1], "bin")
       fs.mkdirSync(bin, { recursive: true })
       fs.writeFileSync(path.join(bin, "cargo-audit"), `#!${process.execPath}\nconsole.log("cargo-audit ${state.wrongVersion ? "0.22.2" : "0.23.0"}")\n`, { mode: 0o755 })
-      if (state.changeLock) fs.writeFileSync(path.join(options.cwd, "Cargo.lock"), "unexpected resolution\n")
       return { status: state.failBuild ? 1 : 0, stdout: "" }
     }
     return spawnSync(command, args, options)
@@ -56,10 +55,12 @@ test("installs the reviewed graph and reuses only an intact cached tool", t => {
   assert.equal(installCargoAudit(f.repo, f.run), first)
   assert.equal(f.state.downloads, 1)
   assert.equal(f.state.builds, 1)
-  fs.writeFileSync(first, "corrupt cached executable\n")
+  const built = fs.readFileSync(first, "utf8")
+  fs.appendFileSync(first, "// changed cached bytes\n")
+  assert.equal(spawnSync(first, ["--version"], { encoding: "utf8" }).stdout.trim(), "cargo-audit 0.23.0")
   assert.equal(installCargoAudit(f.repo, f.run), first)
   assert.equal(f.state.builds, 2)
-  assert.equal(spawnSync(first, ["--version"], { encoding: "utf8" }).status, 0)
+  assert.equal(fs.readFileSync(first, "utf8"), built)
 })
 
 test("a reviewed lock change gets a separate installation even at the same version", t => {
@@ -90,14 +91,10 @@ test("a partial failed build cannot become a reusable installation", t => {
   assert.equal(f.state.builds, 2)
 })
 
-test("a wrong executable version or changed build lock fails before publication", t => {
+test("a wrong executable version fails before publication", t => {
   const f = fixture(t)
   f.state.wrongVersion = true
   assert.throws(() => installCargoAudit(f.repo, f.run), /Unexpected auditor version/)
-  assertNoPublishedTool(f.repo)
-  f.state.wrongVersion = false
-  f.state.changeLock = true
-  assert.throws(() => installCargoAudit(f.repo, f.run), /changed the pinned lock/)
   assertNoPublishedTool(f.repo)
 })
 

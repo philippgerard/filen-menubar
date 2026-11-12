@@ -10,8 +10,10 @@ The precise Cargo update also normalized six Windows dependency references to
 the existing windows-sys 0.52.0 entry; no other package version changed.
 
 The tool cache is bound to the archive, lock, installer, host platform and
-architecture. A receipt records the binary hash; incomplete or altered cached
-tools are rebuilt. Failed downloads, checksum mismatches, failed builds and
+architecture. A receipt beside the binary records its hash, so incomplete cached
+tools and binaries whose bytes changed are rebuilt even when they still report
+the expected version. The receipt detects accidental changes only; anyone who
+can rewrite both files bypasses it. Failed downloads, checksum mismatches, failed builds and
 incorrect executable versions cannot publish a cached installation.
 The bundled-backend build fingerprint includes the installer, source pin and
 reviewed lock so updates invalidate that build's cached audit as well.
