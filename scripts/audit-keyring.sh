@@ -2,17 +2,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly audit_version="0.22.2"
-tool_root="${repo_root}/src-tauri/target/cargo-audit-${audit_version}"
-audit_bin="${tool_root}/bin/cargo-audit"
-
-if [[ ! -x "$audit_bin" ]]; then
-    cargo install cargo-audit \
-        --version "$audit_version" \
-        --locked \
-        --root "$tool_root"
-fi
-[[ "$($audit_bin --version)" == "cargo-audit ${audit_version}" ]]
+audit_bin="$(node "${repo_root}/scripts/install-cargo-audit.mjs")"
+# The auditor's compiled dependencies are part of the build trust boundary too.
+GIT_CONFIG_GLOBAL=/dev/null "$audit_bin" audit \
+    --file "${repo_root}/third-party/cargo-audit/Cargo.lock" \
+    --deny warnings
 # Memory-unsoundness advisories must fail the build even when RustSec marks
 # them informational. Keep upstream maintenance notices visible separately.
 GIT_CONFIG_GLOBAL=/dev/null "$audit_bin" audit \
