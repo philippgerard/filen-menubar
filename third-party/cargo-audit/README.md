@@ -13,8 +13,9 @@ The tool cache is bound to the archive, lock, installer, host platform and
 architecture. A receipt beside the binary records its hash, so incomplete cached
 tools and binaries whose bytes changed are rebuilt even when they still report
 the expected version. The receipt detects accidental changes only; anyone who
-can rewrite both files bypasses it. Failed downloads, checksum mismatches, failed builds and
-incorrect executable versions cannot publish a cached installation.
+can rewrite both files bypasses it. Failed downloads, checksum mismatches,
+failed builds and incorrect executable versions cannot publish a cached
+installation.
 The bundled-backend build fingerprint includes the installer, source pin and
 reviewed lock so updates invalidate that build's cached audit as well.
 
@@ -25,6 +26,6 @@ The auditor is a build tool and is not distributed in Filen Menubar.
 
 To update, verify the crates.io archive checksum, take its upstream lock, apply
 only the required precise security updates, and review the lock diff. Run
-`node --test scripts/install-cargo-audit.test.mjs` and `npm run check:rust-audit`;
-the latter installs the new tool and audits the tool, keyring and application.
+`npm run check:rust-audit`; it runs the installer tests, installs the new tool
+and audits the tool, keyring and application.
 Keep `--locked`; do not replace the reviewed graph with install-time resolution.
